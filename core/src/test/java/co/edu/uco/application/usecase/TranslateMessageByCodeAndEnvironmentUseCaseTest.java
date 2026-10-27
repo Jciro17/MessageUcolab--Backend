@@ -15,7 +15,6 @@ import co.edu.uco.application.secondaryports.translation.MessageTranslationPort;
 import co.edu.uco.application.usecase.validator.message.FindMessageCodeValidator;
 import co.edu.uco.application.usecase.validator.message.TargetLanguageValidator;
 import co.edu.uco.application.usecase.domain.security.MessageAccessContext;
-import co.edu.uco.application.usecase.domain.security.PermissionCode;
 import co.edu.uco.application.usecase.security.MessageEnvironmentResolver;
 import co.edu.uco.crosscutting.catalog.MessageCatalogCodeEnum;
 import co.edu.uco.crosscutting.exceptions.BusinessException;
@@ -43,7 +42,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class TranslateMessageByCodeAndEnvironmentUseCaseTest {
 
-    private static final MessageAccessContext ACCESS_CONTEXT = new MessageAccessContext("env", null);
+    private static final MessageAccessContext ACCESS_CONTEXT = new MessageAccessContext("app-1");
 
     @Mock
     private MessageCatalogStrategy messageCatalogStrategy;
@@ -70,7 +69,7 @@ class TranslateMessageByCodeAndEnvironmentUseCaseTest {
         useCase = new TranslateMessageByCodeAndEnvironmentUseCase(
                 messageCatalogStrategy, messageTranslationPort, messageTranslationCachePort,
                 findMessageCodeValidator, targetLanguageValidator, environmentResolver, loggerFactory);
-        lenient().when(environmentResolver.resolve(ACCESS_CONTEXT, PermissionCode.MESSAGE_TRANSLATE)).thenReturn("env");
+        lenient().when(environmentResolver.resolveApplication(ACCESS_CONTEXT)).thenReturn("env");
     }
 
     private MessageData messageWithData() {
@@ -88,7 +87,7 @@ class TranslateMessageByCodeAndEnvironmentUseCaseTest {
     @Test
     void execute_translatesMessageSuccessfully() {
         MessageData message = messageWithData();
-        when(messageCatalogStrategy.getMessageByCodeAndEnvironment("CODE", "env"))
+        when(messageCatalogStrategy.getMessageByCodeAndApplication("CODE", "env"))
                 .thenReturn(Optional.of(message));
         MessageTranslationResponseData response = MessageTranslationResponseData.create(
                 "Translated Title", "Translated Content", "translated type", "translated category",
@@ -118,7 +117,7 @@ class TranslateMessageByCodeAndEnvironmentUseCaseTest {
     @Test
     void execute_usesTrimmedSourceLanguage_whenProvided() {
         MessageData message = messageWithData();
-        when(messageCatalogStrategy.getMessageByCodeAndEnvironment("CODE", "env"))
+        when(messageCatalogStrategy.getMessageByCodeAndApplication("CODE", "env"))
                 .thenReturn(Optional.of(message));
         MessageTranslationResponseData response = MessageTranslationResponseData.create(
                 "t", "c", "tt", "tc", "tf", "ollama", "m", 1L);
@@ -133,7 +132,7 @@ class TranslateMessageByCodeAndEnvironmentUseCaseTest {
     @Test
     void execute_servesTranslationFromCache_whenCacheHit() {
         MessageData message = messageWithData();
-        when(messageCatalogStrategy.getMessageByCodeAndEnvironment("CODE", "env"))
+        when(messageCatalogStrategy.getMessageByCodeAndApplication("CODE", "env"))
                 .thenReturn(Optional.of(message));
         MessageTranslationResponseData cached = MessageTranslationResponseData.create(
                 "Cached Title", "Cached Content", "cached type", "cached category",
@@ -159,7 +158,7 @@ class TranslateMessageByCodeAndEnvironmentUseCaseTest {
 
     @Test
     void execute_throwsBusinessException_whenMessageNotFound() {
-        when(messageCatalogStrategy.getMessageByCodeAndEnvironment("CODE", "env"))
+        when(messageCatalogStrategy.getMessageByCodeAndApplication("CODE", "env"))
                 .thenReturn(Optional.empty());
         when(messageCatalogStrategy.getSystemMessageContent(MessageCatalogCodeEnum.FUN_012.getCode()))
                 .thenReturn("Message %s not found in environment %s");
@@ -173,7 +172,7 @@ class TranslateMessageByCodeAndEnvironmentUseCaseTest {
     @Test
     void execute_throwsBusinessException_whenTranslationFails() {
         MessageData message = messageWithData();
-        when(messageCatalogStrategy.getMessageByCodeAndEnvironment("CODE", "env"))
+        when(messageCatalogStrategy.getMessageByCodeAndApplication("CODE", "env"))
                 .thenReturn(Optional.of(message));
         when(messageTranslationPort.translate(any(MessageTranslationRequestData.class)))
                 .thenThrow(new IllegalStateException("translation down"));

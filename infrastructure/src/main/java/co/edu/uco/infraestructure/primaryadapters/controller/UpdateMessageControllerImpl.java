@@ -4,7 +4,6 @@ import co.edu.uco.application.primaryports.dto.message.UpdateMessageDTO;
 import co.edu.uco.application.primaryports.facade.message.UpdateMessageUseCaseFacade;
 import co.edu.uco.application.secondaryports.catalog.CatalogPort;
 import co.edu.uco.application.secondaryports.presenter.PresenterPort;
-import co.edu.uco.application.usecase.domain.security.ExternalIdentity;
 import co.edu.uco.application.usecase.domain.security.MessageAccessContext;
 import co.edu.uco.infraestructure.primaryadapters.ReactiveHttpResponse;
 import co.edu.uco.infraestructure.primaryadapters.UpdateMessageController;
@@ -15,8 +14,7 @@ import reactor.core.publisher.Mono;
 
 import java.util.List;
 
-import static co.edu.uco.infraestructure.config.InfrastructureConstant.ENVIRONMENT_ID_ATTRIBUTE;
-import static co.edu.uco.infraestructure.config.InfrastructureConstant.EXTERNAL_IDENTITY_ATTRIBUTE;
+import static co.edu.uco.infraestructure.config.InfrastructureConstant.APPLICATION_ID_ATTRIBUTE;
 
 @RestController
 final class UpdateMessageControllerImpl implements UpdateMessageController {
@@ -43,7 +41,6 @@ final class UpdateMessageControllerImpl implements UpdateMessageController {
 
     private MessageAccessContext context(ServerWebExchange exchange) {
         return new MessageAccessContext(
-                (String) exchange.getAttribute(ENVIRONMENT_ID_ATTRIBUTE),
-                (ExternalIdentity) exchange.getAttribute(EXTERNAL_IDENTITY_ATTRIBUTE));
+                (String) exchange.getAttribute(APPLICATION_ID_ATTRIBUTE));
     }
 }

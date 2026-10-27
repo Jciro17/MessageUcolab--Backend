@@ -8,6 +8,7 @@ import co.edu.uco.application.secondaryports.repository.FunctionalityCatalogRepo
 import co.edu.uco.application.secondaryports.repository.MessageCodeQueryPort;
 import co.edu.uco.application.secondaryports.repository.RecordExistsCatalogPort;
 import co.edu.uco.application.secondaryports.repository.ReferenceCatalog;
+import co.edu.uco.application.usecase.validator.message.environment.MessageEnvironmentSelectionCompositeValidator;
 import co.edu.uco.crosscutting.catalog.MessageCatalogCodeEnum;
 import co.edu.uco.crosscutting.exceptions.BusinessRuleException;
 import co.edu.uco.crosscutting.exceptions.ConflictException;
@@ -34,9 +35,11 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -70,13 +73,15 @@ class CreateMessageCompositeValidatorTest {
     private FunctionalityCatalogRepository functionalityCatalogRepository;
     @Mock
     private MessageCodeQueryPort messageCodeQueryPort;
+    @Mock
+    private MessageEnvironmentSelectionCompositeValidator environmentSelectionValidator;
 
     private CreateMessageCompositeValidator validator;
 
     @BeforeEach
     void setUp() {
         validator = new CreateMessageCompositeValidator(catalogPort, recordExistsCatalogPort,
-                functionalityCatalogRepository, messageCodeQueryPort);
+                functionalityCatalogRepository, messageCodeQueryPort, environmentSelectionValidator);
     }
 
     private CreateMessageDTO.CreateMessageDTOBuilder validDtoBuilder() {
@@ -130,7 +135,8 @@ class CreateMessageCompositeValidatorTest {
 
         assertDoesNotThrow(() -> validator.validate(validDto(), APPLICATION_ID_TEXT));
 
-        verify(functionalityCatalogRepository).findAllByApplicationId(APPLICATION_ID_TEXT);
+        verify(functionalityCatalogRepository, times(2))
+                .findAllByApplicationId(APPLICATION_ID_TEXT);
     }
 
     @Test
@@ -143,7 +149,8 @@ class CreateMessageCompositeValidatorTest {
 
         assertDoesNotThrow(() -> validator.validate(dto, APPLICATION_ID_TEXT.toUpperCase()));
 
-        verify(functionalityCatalogRepository).findAllByApplicationId(APPLICATION_ID_TEXT);
+        verify(functionalityCatalogRepository, times(2))
+                .findAllByApplicationId(APPLICATION_ID_TEXT);
     }
 
     @Test
@@ -160,7 +167,8 @@ class CreateMessageCompositeValidatorTest {
         order.verify(recordExistsCatalogPort).exists(ReferenceCatalog.MESSAGE_TYPE, TYPE_ID);
         order.verify(recordExistsCatalogPort).exists(ReferenceCatalog.MESSAGE_CATEGORY, CATEGORY_ID);
         order.verify(recordExistsCatalogPort).exists(ReferenceCatalog.MESSAGE_STATE, STATUS_ID);
-        order.verify(functionalityCatalogRepository).findAllByApplicationId(APPLICATION_ID_TEXT);
+        order.verify(functionalityCatalogRepository, times(2))
+                .findAllByApplicationId(APPLICATION_ID_TEXT);
         order.verify(messageCodeQueryPort)
                 .existsByCodeAndApplicationId(NORMALIZED_CODE, APPLICATION_ID_TEXT);
     }
@@ -491,7 +499,27 @@ class CreateMessageCompositeValidatorTest {
     }
 
     private static FunctionalityData functionality(UUID functionalityId, UUID applicationId) {
-        return new FunctionalityData(functionalityId, "Functionality",
+        FunctionalityData functionality = new FunctionalityData(functionalityId, "Functionality",
                 ApplicationData.build(applicationId, "Application"));
+        functionality.setStateId(UUID.fromString("123e4567-e89b-12d3-a456-426614175107"));
+        functionality.setState("Active");
+        return functionality;
+    }
+
+    @Test
+    void validate_delegatesSelectedEnvironmentsWithApplicationId() {
+        stubCatalogReferences();
+        List<String> environments = List.of(MISSING_ID);
+        CreateMessageDTO dto = validDtoBuilder().environmentIds(environments).build();
+        doThrow(BusinessRuleException.buildUserException("Environment check"))
+                .when(environmentSelectionValidator).validate(environments, APPLICATION_ID_TEXT);
+
+        assertThatThrownBy(() -> validator.validate(dto, APPLICATION_ID_TEXT))
+                .isInstanceOf(BusinessRuleException.class)
+                .satisfies(ex -> assertThat(((BusinessRuleException) ex).getUserMessage())
+                        .isEqualTo("Environment check"));
+
+        verify(environmentSelectionValidator).validate(environments, APPLICATION_ID_TEXT);
+        verifyNoInteractions(functionalityCatalogRepository, messageCodeQueryPort);
     }
 }

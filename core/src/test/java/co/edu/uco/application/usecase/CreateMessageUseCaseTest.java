@@ -2,19 +2,13 @@ package co.edu.uco.application.usecase;
 
 import co.edu.uco.application.primaryports.dto.message.CreateMessageDTO;
 import co.edu.uco.application.secondaryports.catalog.CatalogPort;
-import co.edu.uco.application.secondaryports.entity.ApplicationData;
-import co.edu.uco.application.secondaryports.entity.EnvironmentData;
-import co.edu.uco.application.secondaryports.entity.EnvironmentTypeData;
 import co.edu.uco.application.secondaryports.entity.MessageData;
 import co.edu.uco.application.secondaryports.entity.MessageEnvironmentStateData;
 import co.edu.uco.application.secondaryports.logging.LoggingPort;
 import co.edu.uco.application.secondaryports.logging.LoggingPortFactory;
 import co.edu.uco.application.secondaryports.repository.CreateMessageRepository;
-import co.edu.uco.application.secondaryports.repository.EnvironmentRepository;
 import co.edu.uco.application.secondaryports.repository.MessageEnvironmentStateCatalogRepository;
-import co.edu.uco.application.usecase.domain.security.ExternalIdentity;
 import co.edu.uco.application.usecase.domain.security.MessageAccessContext;
-import co.edu.uco.application.usecase.domain.security.PermissionCode;
 import co.edu.uco.application.usecase.security.MessageEnvironmentResolver;
 import co.edu.uco.application.usecase.validator.message.CreateMessageCompositeValidator;
 import co.edu.uco.crosscutting.catalog.MessageCatalogCodeEnum;
@@ -34,10 +28,8 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Stream;
 
@@ -47,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.SoftAssertions.assertSoftly;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -58,7 +51,8 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class CreateMessageUseCaseTest {
 
-    private static final String ENVIRONMENT_UUID = "123e4567-e89b-12d3-a456-426614175000";
+    private static final String DEVELOP_UUID = "123e4567-e89b-12d3-a456-426614175000";
+    private static final String PRODUCTION_UUID = "123e4567-e89b-12d3-a456-426614175002";
     private static final String APP_UUID = "123e4567-e89b-12d3-a456-426614175020";
     private static final String FUNC_UUID = "123e4567-e89b-12d3-a456-426614175001";
     private static final String TYPE_UUID = "123e4567-e89b-12d3-a456-426614175010";
@@ -66,9 +60,8 @@ class CreateMessageUseCaseTest {
     private static final String STATUS_UUID = "123e4567-e89b-12d3-a456-426614175012";
     private static final String ACTIVE_STATE_UUID = "123e4567-e89b-12d3-a456-426614175013";
     private static final String FOREIGN_STATE_UUID = "123e4567-e89b-12d3-a456-426614175014";
+    private static final List<String> ENVIRONMENTS = List.of(DEVELOP_UUID, PRODUCTION_UUID);
     private static final String NO_ACTIVE_STATE_MESSAGE = "No existe estado de ambiente de mensaje activo";
-    private static final ExternalIdentity IDENTITY = new ExternalIdentity(
-            "issuer", "subject", "user@example.com", Instant.MAX);
 
     @Mock
     private CreateMessageRepository createMessageRepository;
@@ -76,8 +69,6 @@ class CreateMessageUseCaseTest {
     private CreateMessageCompositeValidator validator;
     @Mock
     private MessageEnvironmentResolver environmentResolver;
-    @Mock
-    private EnvironmentRepository environmentRepository;
     @Mock
     private MessageEnvironmentStateCatalogRepository messageEnvironmentStateRepository;
     @Mock
@@ -93,7 +84,7 @@ class CreateMessageUseCaseTest {
     void setUp() {
         when(loggerFactory.getLogger(CreateMessageUseCase.class)).thenReturn(log);
         useCase = new CreateMessageUseCase(createMessageRepository, validator,
-                environmentResolver, environmentRepository, messageEnvironmentStateRepository,
+                environmentResolver, messageEnvironmentStateRepository,
                 catalogPort, loggerFactory);
     }
 
@@ -106,22 +97,21 @@ class CreateMessageUseCaseTest {
                 .categoryId(CATEGORY_UUID)
                 .statusId(STATUS_UUID)
                 .functionalityId(FUNC_UUID)
+                .environmentIds(ENVIRONMENTS)
                 .build();
     }
 
-    private MessageAccessContext legacyContext() {
-        return new MessageAccessContext("env-1", null);
+    private MessageAccessContext sessionContext() {
+        return new MessageAccessContext(APP_UUID);
     }
 
     private MessageAccessContext authenticatedContext() {
-        return new MessageAccessContext(null, IDENTITY);
+        return new MessageAccessContext(APP_UUID);
     }
 
-    private void stubEnvironmentResolvingTo(String environmentId, String applicationId) {
-        when(environmentResolver.resolve(any(), eq(PermissionCode.MESSAGE_CREATE)))
-                .thenReturn(environmentId);
-        when(environmentRepository.findById(environmentId))
-                .thenReturn(Optional.of(environment(applicationId)));
+    private void stubApplicationResolvingTo(String applicationId) {
+        when(environmentResolver.resolveApplication(any()))
+                .thenReturn(applicationId);
     }
 
     private void stubActiveStateFoundAmongForeignOnes() {
@@ -129,12 +119,6 @@ class CreateMessageUseCaseTest {
                 .thenReturn(List.of(
                         new MessageEnvironmentStateData(UUID.fromString(FOREIGN_STATE_UUID), "Pending"),
                         new MessageEnvironmentStateData(UUID.fromString(ACTIVE_STATE_UUID), STATE_ACTIVE)));
-    }
-
-    private static EnvironmentData environment(String applicationId) {
-        return new EnvironmentData(UUID.fromString(ENVIRONMENT_UUID),
-                ApplicationData.build(UUID.fromString(applicationId), "Application"),
-                new EnvironmentTypeData(UUID.randomUUID(), "Environment"));
     }
 
     private static Stream<Arguments> inactiveStateCatalogs() {
@@ -147,37 +131,59 @@ class CreateMessageUseCaseTest {
     }
 
     @Test
-    void createMessage_derivesApplicationIdFromResolvedEnvironmentAndPersists() {
+    void createMessage_resolvesApplicationValidatesAndPersistsInSelectedEnvironments() {
         CreateMessageDTO dto = validDto();
-        MessageAccessContext context = legacyContext();
-        stubEnvironmentResolvingTo("env-1", APP_UUID);
+        MessageAccessContext context = sessionContext();
+        stubApplicationResolvingTo(APP_UUID);
         stubActiveStateFoundAmongForeignOnes();
 
         useCase.createMessage(dto, context);
 
-        InOrder order = inOrder(environmentResolver, environmentRepository, validator,
-                messageEnvironmentStateRepository, createMessageRepository);
-        order.verify(environmentResolver).resolve(context, PermissionCode.MESSAGE_CREATE);
-        order.verify(environmentRepository).findById("env-1");
+        InOrder order = inOrder(environmentResolver, validator, messageEnvironmentStateRepository,
+                createMessageRepository);
+        order.verify(environmentResolver).resolveApplication(context);
         order.verify(validator).validate(dto, APP_UUID);
         order.verify(messageEnvironmentStateRepository).findAll();
         order.verify(createMessageRepository)
-                .createMessage(any(), eq("env-1"), eq(ACTIVE_STATE_UUID));
+                .createMessage(any(), eq(ENVIRONMENTS), eq(ACTIVE_STATE_UUID));
         verify(log).info("Message created successfully with code: {}", "MSG_WELCOME");
+    }
+
+    @Test
+    void createMessage_persistsInSingleEnvironment_whenOnlyOneIsSelected() {
+        CreateMessageDTO dto = validDto();
+        dto.setEnvironmentIds(List.of(PRODUCTION_UUID));
+        stubApplicationResolvingTo(APP_UUID);
+        stubActiveStateFoundAmongForeignOnes();
+
+        useCase.createMessage(dto, sessionContext());
+
+        verify(createMessageRepository).createMessage(any(), eq(List.of(PRODUCTION_UUID)), eq(ACTIVE_STATE_UUID));
+    }
+
+    @Test
+    void createMessage_normalizesEnvironmentIds() {
+        CreateMessageDTO dto = validDto();
+        dto.setEnvironmentIds(List.of(" " + DEVELOP_UUID.toUpperCase() + " "));
+        stubApplicationResolvingTo(APP_UUID);
+        stubActiveStateFoundAmongForeignOnes();
+
+        useCase.createMessage(dto, sessionContext());
+
+        verify(createMessageRepository).createMessage(any(), eq(List.of(DEVELOP_UUID)), eq(ACTIVE_STATE_UUID));
     }
 
     @Test
     void createMessage_persistsAndLogsNormalizedCode_whenDtoCodeIsRawSuffix() {
         CreateMessageDTO dto = validDto();
         dto.setCode("  wel  come  ");
-        MessageAccessContext context = legacyContext();
-        stubEnvironmentResolvingTo("env-1", APP_UUID);
+        stubApplicationResolvingTo(APP_UUID);
         stubActiveStateFoundAmongForeignOnes();
         ArgumentCaptor<MessageData> messageCaptor = ArgumentCaptor.forClass(MessageData.class);
 
-        useCase.createMessage(dto, context);
+        useCase.createMessage(dto, sessionContext());
 
-        verify(createMessageRepository).createMessage(messageCaptor.capture(), eq("env-1"),
+        verify(createMessageRepository).createMessage(messageCaptor.capture(), eq(ENVIRONMENTS),
                 eq(ACTIVE_STATE_UUID));
         assertAll(
                 () -> assertThat(messageCaptor.getValue().getCode())
@@ -187,30 +193,29 @@ class CreateMessageUseCaseTest {
     }
 
     @Test
-    void createMessage_derivesApplicationIdFromAuthenticatedEnvironmentContext() {
+    void createMessage_resolvesApplicationFromSessionContext() {
         CreateMessageDTO dto = validDto();
         MessageAccessContext context = authenticatedContext();
-        stubEnvironmentResolvingTo("env-auth", APP_UUID);
+        stubApplicationResolvingTo(APP_UUID);
         stubActiveStateFoundAmongForeignOnes();
 
         useCase.createMessage(dto, context);
 
-        verify(environmentRepository).findById("env-auth");
+        verify(environmentResolver).resolveApplication(context);
         verify(validator).validate(dto, APP_UUID);
-        verify(createMessageRepository).createMessage(any(), eq("env-auth"), eq(ACTIVE_STATE_UUID));
+        verify(createMessageRepository).createMessage(any(), eq(ENVIRONMENTS), eq(ACTIVE_STATE_UUID));
     }
 
     @Test
-    void createMessage_buildsCatalogEntitiesWithDerivedApplicationIdAndEmptyNames() {
+    void createMessage_buildsCatalogEntitiesWithResolvedApplicationIdAndEmptyNames() {
         CreateMessageDTO dto = validDto();
-        MessageAccessContext context = legacyContext();
-        stubEnvironmentResolvingTo("env-1", APP_UUID);
+        stubApplicationResolvingTo(APP_UUID);
         stubActiveStateFoundAmongForeignOnes();
         ArgumentCaptor<MessageData> messageCaptor = ArgumentCaptor.forClass(MessageData.class);
 
-        useCase.createMessage(dto, context);
+        useCase.createMessage(dto, sessionContext());
 
-        verify(createMessageRepository).createMessage(messageCaptor.capture(), eq("env-1"),
+        verify(createMessageRepository).createMessage(messageCaptor.capture(), eq(ENVIRONMENTS),
                 eq(ACTIVE_STATE_UUID));
         MessageData message = messageCaptor.getValue();
         assertSoftly(softly -> {
@@ -231,32 +236,13 @@ class CreateMessageUseCaseTest {
     }
 
     @Test
-    void createMessage_throwsForbiddenUsingFun035_whenResolvedEnvironmentDoesNotExist() {
-        CreateMessageDTO dto = validDto();
-        MessageAccessContext context = legacyContext();
-        when(environmentResolver.resolve(context, PermissionCode.MESSAGE_CREATE)).thenReturn("env-missing");
-        when(environmentRepository.findById("env-missing")).thenReturn(Optional.empty());
-        when(catalogPort.getMessage(MessageCatalogCodeEnum.FUN_035.getCode()))
-                .thenReturn("Ambiente no encontrado");
-
-        assertThatThrownBy(() -> useCase.createMessage(dto, context))
-                .isInstanceOf(ForbiddenException.class)
-                .satisfies(exception -> assertThat((ForbiddenException) exception)
-                        .extracting(ForbiddenException::getHttpStatus, ForbiddenException::getUserMessage)
-                        .containsExactly(403, "Ambiente no encontrado"));
-
-        verifyNoInteractions(validator, messageEnvironmentStateRepository, createMessageRepository);
-    }
-
-    @Test
     void createMessage_throwsCrossWordsException_whenCatalogReferenceIsNotUuid() {
         CreateMessageDTO dto = validDto();
         dto.setTypeId("not-a-uuid");
-        MessageAccessContext context = legacyContext();
-        stubEnvironmentResolvingTo("env-1", APP_UUID);
+        stubApplicationResolvingTo(APP_UUID);
         stubActiveStateFoundAmongForeignOnes();
 
-        assertThatThrownBy(() -> useCase.createMessage(dto, context))
+        assertThatThrownBy(() -> useCase.createMessage(dto, sessionContext()))
                 .isInstanceOf(CrossWordsException.class)
                 .satisfies(ex -> assertThat(((CrossWordsException) ex).getTechnicalMessage())
                         .isEqualTo("The UUID to be converted has no valid format."));
@@ -264,42 +250,39 @@ class CreateMessageUseCaseTest {
     }
 
     @Test
-    void createMessage_propagatesForbiddenFromEnvironmentResolver() {
+    void createMessage_propagatesForbiddenFromApplicationResolver() {
         CreateMessageDTO dto = validDto();
         MessageAccessContext context = authenticatedContext();
         ForbiddenException failure = ForbiddenException.buildUserException("Permission denied");
-        doThrow(failure).when(environmentResolver).resolve(context, PermissionCode.MESSAGE_CREATE);
+        doThrow(failure).when(environmentResolver).resolveApplication(context);
 
         assertThatThrownBy(() -> useCase.createMessage(dto, context)).isSameAs(failure);
-        verifyNoInteractions(environmentRepository, validator, messageEnvironmentStateRepository,
-                createMessageRepository);
+        verifyNoInteractions(validator, messageEnvironmentStateRepository, createMessageRepository);
     }
 
     @Test
     void createMessage_propagatesValidationErrorWithoutQueryingEnvironmentStateCatalog() {
         CreateMessageDTO dto = validDto();
-        MessageAccessContext context = legacyContext();
-        stubEnvironmentResolvingTo("env-1", APP_UUID);
-        doThrow(BusinessRuleException.buildUserException("Invalid message"))
+        stubApplicationResolvingTo(APP_UUID);
+        doThrow(BusinessRuleException.buildUserException("Select at least one environment"))
                 .when(validator).validate(dto, APP_UUID);
 
-        assertThatThrownBy(() -> useCase.createMessage(dto, context))
+        assertThatThrownBy(() -> useCase.createMessage(dto, sessionContext()))
                 .isInstanceOf(BusinessRuleException.class)
                 .satisfies(ex -> assertThat(((BusinessRuleException) ex).getUserMessage())
-                        .isEqualTo("Invalid message"));
+                        .isEqualTo("Select at least one environment"));
         verifyNoInteractions(messageEnvironmentStateRepository, createMessageRepository);
     }
 
     @Test
     void createMessage_throwsCrossWordsException_whenRepositoryFails() {
         CreateMessageDTO dto = validDto();
-        MessageAccessContext context = legacyContext();
-        stubEnvironmentResolvingTo("env-1", APP_UUID);
+        stubApplicationResolvingTo(APP_UUID);
         stubActiveStateFoundAmongForeignOnes();
         doThrow(new RuntimeException("db down")).when(createMessageRepository)
-                .createMessage(any(), anyString(), anyString());
+                .createMessage(any(), anyList(), anyString());
 
-        assertThatThrownBy(() -> useCase.createMessage(dto, context))
+        assertThatThrownBy(() -> useCase.createMessage(dto, sessionContext()))
                 .isInstanceOf(CrossWordsException.class)
                 .satisfies(ex -> assertThat(((CrossWordsException) ex).getTechnicalMessage())
                         .isEqualTo("Error al crear el mensaje"));
@@ -309,13 +292,12 @@ class CreateMessageUseCaseTest {
     @Test
     void createMessage_rethrowsDomainExceptionFromRepository() {
         CreateMessageDTO dto = validDto();
-        MessageAccessContext context = legacyContext();
-        stubEnvironmentResolvingTo("env-1", APP_UUID);
+        stubApplicationResolvingTo(APP_UUID);
         stubActiveStateFoundAmongForeignOnes();
         doThrow(BusinessRuleException.buildUserException("conflict"))
-                .when(createMessageRepository).createMessage(any(), anyString(), anyString());
+                .when(createMessageRepository).createMessage(any(), anyList(), anyString());
 
-        assertThatThrownBy(() -> useCase.createMessage(dto, context))
+        assertThatThrownBy(() -> useCase.createMessage(dto, sessionContext()))
                 .isInstanceOf(BusinessRuleException.class);
     }
 
@@ -326,24 +308,22 @@ class CreateMessageUseCaseTest {
         @ValueSource(strings = {"active", "ACTIVE", "aCtIvE"})
         void createMessage_persistsActiveStateId_whenCatalogNameDiffersOnlyInCase(String catalogStateName) {
             CreateMessageDTO dto = validDto();
-            MessageAccessContext context = legacyContext();
-            stubEnvironmentResolvingTo("env-1", APP_UUID);
+            stubApplicationResolvingTo(APP_UUID);
             when(messageEnvironmentStateRepository.findAll())
                     .thenReturn(List.of(
                             new MessageEnvironmentStateData(UUID.fromString(FOREIGN_STATE_UUID), "Pending"),
                             new MessageEnvironmentStateData(
                                     UUID.fromString(ACTIVE_STATE_UUID), catalogStateName)));
 
-            useCase.createMessage(dto, context);
+            useCase.createMessage(dto, sessionContext());
 
-            verify(createMessageRepository).createMessage(any(), eq("env-1"), eq(ACTIVE_STATE_UUID));
+            verify(createMessageRepository).createMessage(any(), eq(ENVIRONMENTS), eq(ACTIVE_STATE_UUID));
         }
 
         @Test
         void createMessage_skipsNullAndForeignEntries_whenCatalogReturnsMixedStates() {
             CreateMessageDTO dto = validDto();
-            MessageAccessContext context = legacyContext();
-            stubEnvironmentResolvingTo("env-1", APP_UUID);
+            stubApplicationResolvingTo(APP_UUID);
             List<MessageEnvironmentStateData> mixedStates = Arrays.asList(
                     null,
                     new MessageEnvironmentStateData(UUID.fromString(FOREIGN_STATE_UUID), "Deleted"),
@@ -351,9 +331,9 @@ class CreateMessageUseCaseTest {
                     new MessageEnvironmentStateData(UUID.fromString(ACTIVE_STATE_UUID), STATE_ACTIVE));
             when(messageEnvironmentStateRepository.findAll()).thenReturn(mixedStates);
 
-            useCase.createMessage(dto, context);
+            useCase.createMessage(dto, sessionContext());
 
-            verify(createMessageRepository).createMessage(any(), eq("env-1"), eq(ACTIVE_STATE_UUID));
+            verify(createMessageRepository).createMessage(any(), eq(ENVIRONMENTS), eq(ACTIVE_STATE_UUID));
         }
 
         @ParameterizedTest(name = "catálogo de estados {0}")
@@ -361,13 +341,12 @@ class CreateMessageUseCaseTest {
         void createMessage_throwsBusinessRuleUsingFun197_whenCatalogHasNoActiveState(
                 String scenario, List<MessageEnvironmentStateData> states) {
             CreateMessageDTO dto = validDto();
-            MessageAccessContext context = legacyContext();
-            stubEnvironmentResolvingTo("env-1", APP_UUID);
+            stubApplicationResolvingTo(APP_UUID);
             when(messageEnvironmentStateRepository.findAll()).thenReturn(states);
             when(catalogPort.getMessage(MessageCatalogCodeEnum.FUN_197.getCode()))
                     .thenReturn(NO_ACTIVE_STATE_MESSAGE);
 
-            assertThatThrownBy(() -> useCase.createMessage(dto, context))
+            assertThatThrownBy(() -> useCase.createMessage(dto, sessionContext()))
                     .as("Catálogo de estados: %s", scenario)
                     .isInstanceOf(BusinessRuleException.class)
                     .satisfies(ex -> assertThat(((BusinessRuleException) ex).getUserMessage())

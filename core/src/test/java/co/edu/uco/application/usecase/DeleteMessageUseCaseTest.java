@@ -6,9 +6,7 @@ import co.edu.uco.application.secondaryports.logging.LoggingPort;
 import co.edu.uco.application.secondaryports.logging.LoggingPortFactory;
 import co.edu.uco.application.secondaryports.repository.DataBaseMessageRepository;
 import co.edu.uco.application.secondaryports.repository.DeleteMessageRepository;
-import co.edu.uco.application.usecase.domain.security.ExternalIdentity;
 import co.edu.uco.application.usecase.domain.security.MessageAccessContext;
-import co.edu.uco.application.usecase.domain.security.PermissionCode;
 import co.edu.uco.application.usecase.security.MessageEnvironmentResolver;
 import co.edu.uco.crosscutting.catalog.MessageCatalogCodeEnum;
 import co.edu.uco.crosscutting.exceptions.BusinessRuleException;
@@ -23,7 +21,6 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -43,8 +40,6 @@ class DeleteMessageUseCaseTest {
 
     private static final String MESSAGE_UUID = "123e4567-e89b-12d3-a456-426614175030";
     private static final String MESSAGE_CODE = "MSG_WELCOME";
-    private static final ExternalIdentity IDENTITY = new ExternalIdentity(
-            "issuer", "subject", "user@example.com", Instant.MAX);
 
     @Mock
     private DeleteMessageRepository deleteMessageRepository;
@@ -72,12 +67,12 @@ class DeleteMessageUseCaseTest {
                 loggerFactory);
     }
 
-    private MessageAccessContext legacyContext() {
-        return new MessageAccessContext("env-1", null);
+    private MessageAccessContext workspaceContext() {
+        return new MessageAccessContext("app-1");
     }
 
     private MessageAccessContext authenticatedContext() {
-        return new MessageAccessContext(null, IDENTITY);
+        return new MessageAccessContext("app-1");
     }
 
     private MessageData existingMessage() {
@@ -94,29 +89,29 @@ class DeleteMessageUseCaseTest {
     }
 
     private void stubExistingMessage() {
-        when(messageRepository.findByCode(MESSAGE_CODE)).thenReturn(Optional.of(existingMessage()));
+        when(messageRepository.findByCodeAndApplication(eq(MESSAGE_CODE), any())).thenReturn(Optional.of(existingMessage()));
     }
 
     @Test
     void deleteMessage_executesFullFlowInOrder() {
-        MessageAccessContext context = legacyContext();
+        MessageAccessContext context = workspaceContext();
         stubExistingMessage();
-        when(environmentResolver.resolve(any(), eq(PermissionCode.MESSAGE_DELETE))).thenReturn("env-1");
+        when(environmentResolver.resolveApplication(any())).thenReturn("env-1");
 
         useCase.deleteMessage(MESSAGE_CODE, context);
 
         InOrder order = inOrder(environmentResolver, messageRepository, deleteMessageRepository);
-        order.verify(environmentResolver).resolve(context, PermissionCode.MESSAGE_DELETE);
-        order.verify(messageRepository).findByCode(MESSAGE_CODE);
+        order.verify(environmentResolver).resolveApplication(context);
+        order.verify(messageRepository).findByCodeAndApplication(eq(MESSAGE_CODE), any());
         order.verify(deleteMessageRepository).deleteMessage(MESSAGE_UUID);
         verify(log).info("Message deleted successfully with id: {}", MESSAGE_CODE);
     }
 
     @Test
     void deleteMessage_deletesUsingExistingMessageUuid() {
-        MessageAccessContext context = legacyContext();
+        MessageAccessContext context = workspaceContext();
         stubExistingMessage();
-        when(environmentResolver.resolve(any(), eq(PermissionCode.MESSAGE_DELETE))).thenReturn("env-1");
+        when(environmentResolver.resolveApplication(any())).thenReturn("env-1");
 
         useCase.deleteMessage(MESSAGE_CODE, context);
 
@@ -125,13 +120,13 @@ class DeleteMessageUseCaseTest {
 
     @Test
     void deleteMessage_trimsMessageIdBeforeProcessing() {
-        MessageAccessContext context = legacyContext();
-        when(messageRepository.findByCode(MESSAGE_CODE)).thenReturn(Optional.of(existingMessage()));
-        when(environmentResolver.resolve(any(), eq(PermissionCode.MESSAGE_DELETE))).thenReturn("env-1");
+        MessageAccessContext context = workspaceContext();
+        when(messageRepository.findByCodeAndApplication(eq(MESSAGE_CODE), any())).thenReturn(Optional.of(existingMessage()));
+        when(environmentResolver.resolveApplication(any())).thenReturn("env-1");
 
         useCase.deleteMessage("  " + MESSAGE_CODE + "  ", context);
 
-        verify(messageRepository).findByCode(MESSAGE_CODE);
+        verify(messageRepository).findByCodeAndApplication(eq(MESSAGE_CODE), any());
         verify(log).info("Message deleted successfully with id: {}", MESSAGE_CODE);
     }
 
@@ -139,18 +134,18 @@ class DeleteMessageUseCaseTest {
     void deleteMessage_worksWithAuthenticatedContext() {
         MessageAccessContext context = authenticatedContext();
         stubExistingMessage();
-        when(environmentResolver.resolve(any(), eq(PermissionCode.MESSAGE_DELETE))).thenReturn("env-auth");
+        when(environmentResolver.resolveApplication(any())).thenReturn("env-auth");
 
         useCase.deleteMessage(MESSAGE_CODE, context);
 
-        verify(environmentResolver).resolve(context, PermissionCode.MESSAGE_DELETE);
+        verify(environmentResolver).resolveApplication(context);
         verify(deleteMessageRepository).deleteMessage(MESSAGE_UUID);
     }
 
     @ParameterizedTest(name = "messageId blank: \"{0}\"")
     @ValueSource(strings = {"", " ", "  "})
     void deleteMessage_throwsBusinessRule_whenMessageIdIsBlank(String blankId) {
-        MessageAccessContext context = legacyContext();
+        MessageAccessContext context = workspaceContext();
         when(catalogPort.getMessage(MessageCatalogCodeEnum.FUN_206.getCode()))
                 .thenReturn("Id de mensaje requerido");
 
@@ -164,9 +159,9 @@ class DeleteMessageUseCaseTest {
 
     @Test
     void deleteMessage_throwsBusinessRule_whenMessageNotFound() {
-        MessageAccessContext context = legacyContext();
-        when(environmentResolver.resolve(any(), eq(PermissionCode.MESSAGE_DELETE))).thenReturn("env-1");
-        when(messageRepository.findByCode(MESSAGE_CODE)).thenReturn(Optional.empty());
+        MessageAccessContext context = workspaceContext();
+        when(environmentResolver.resolveApplication(any())).thenReturn("env-1");
+        when(messageRepository.findByCodeAndApplication(eq(MESSAGE_CODE), any())).thenReturn(Optional.empty());
         when(catalogPort.getMessage(MessageCatalogCodeEnum.FUN_208.getCode()))
                 .thenReturn("Mensaje no encontrado");
 
@@ -182,7 +177,7 @@ class DeleteMessageUseCaseTest {
     void deleteMessage_propagatesForbiddenFromEnvironmentResolver() {
         MessageAccessContext context = authenticatedContext();
         ForbiddenException failure = ForbiddenException.buildUserException("Permission denied");
-        doThrow(failure).when(environmentResolver).resolve(context, PermissionCode.MESSAGE_DELETE);
+        doThrow(failure).when(environmentResolver).resolveApplication(context);
 
         assertThatThrownBy(() -> useCase.deleteMessage(MESSAGE_CODE, context)).isSameAs(failure);
 
@@ -191,9 +186,9 @@ class DeleteMessageUseCaseTest {
 
     @Test
     void deleteMessage_throwsCrossWordsException_whenRepositoryFails() {
-        MessageAccessContext context = legacyContext();
+        MessageAccessContext context = workspaceContext();
         stubExistingMessage();
-        when(environmentResolver.resolve(any(), eq(PermissionCode.MESSAGE_DELETE))).thenReturn("env-1");
+        when(environmentResolver.resolveApplication(any())).thenReturn("env-1");
         when(catalogPort.getMessage(MessageCatalogCodeEnum.FUN_208.getCode()))
                 .thenReturn("Mensaje no encontrado");
         doThrow(new RuntimeException("db error")).when(deleteMessageRepository)
@@ -213,9 +208,9 @@ class DeleteMessageUseCaseTest {
 
     @Test
     void deleteMessage_rethrowsDomainExceptionFromRepository() {
-        MessageAccessContext context = legacyContext();
+        MessageAccessContext context = workspaceContext();
         stubExistingMessage();
-        when(environmentResolver.resolve(any(), eq(PermissionCode.MESSAGE_DELETE))).thenReturn("env-1");
+        when(environmentResolver.resolveApplication(any())).thenReturn("env-1");
         BusinessRuleException domain = BusinessRuleException.buildUserException("conflict");
         doThrow(domain).when(deleteMessageRepository).deleteMessage(MESSAGE_UUID);
 

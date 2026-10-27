@@ -6,7 +6,6 @@ import co.edu.uco.application.secondaryports.logging.LoggingPortFactory;
 import co.edu.uco.application.secondaryports.repository.DataBaseMessageRepository;
 import co.edu.uco.application.secondaryports.repository.DeleteMessageRepository;
 import co.edu.uco.application.usecase.domain.security.MessageAccessContext;
-import co.edu.uco.application.usecase.domain.security.PermissionCode;
 import co.edu.uco.application.usecase.handling.HandlingDeleteMessagePort;
 import co.edu.uco.application.usecase.security.MessageEnvironmentResolver;
 import co.edu.uco.crosscutting.exceptions.BusinessRuleException;
@@ -46,9 +45,10 @@ public final class DeleteMessageUseCase implements HandlingDeleteMessagePort {
             throw BusinessRuleException.buildUserException(catalogPort.getMessage(FUN_206.getCode()));
         }
 
-        environmentResolver.resolve(context, PermissionCode.MESSAGE_DELETE);
+        var applicationId = environmentResolver.resolveApplication(context);
 
-        var existing = messageRepository.findByCode(sanitizedId)
+        // Borra el mensaje de todos sus ambientes; solo dentro de la aplicacion del contexto.
+        var existing = messageRepository.findByCodeAndApplication(sanitizedId, applicationId)
                 .orElseThrow(() -> BusinessRuleException.buildUserException(catalogPort.getMessage(FUN_208.getCode())));
 
         try {

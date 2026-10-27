@@ -20,4 +20,16 @@ public final class PageRequestDTO {
     private String filterFunctionality;
     private String filterType;
     private String filterStatus;
+    // Ids de ambiente separados por coma; vacio muestra todos los de la aplicacion.
+    private String filterEnvironments;
+    private String filterStatusId;
+    private String filterFunctionalityId;
+
+    public PageRequestDTO(String page, String sort, String columnSort, String size,
+                          String filterCode, String filterTitle, String filterCategory,
+                          String filterFunctionality, String filterType, String filterStatus,
+                          String filterEnvironments) {
+        this(page, sort, columnSort, size, filterCode, filterTitle, filterCategory,
+                filterFunctionality, filterType, filterStatus, filterEnvironments, null, null);
+    }
 }

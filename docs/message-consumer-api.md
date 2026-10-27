@@ -5,14 +5,26 @@
 ```http
 GET /messageucolab/v1/messages/resolve?code=MSG_WELCOME
 Accept: application/json
-Token: <token-de-integracion>
+X-Application-Id: <UUID de una aplicación de una organización propia>
+X-Environment-Id: <UUID de un ambiente de esa aplicación>
 ```
 
 La URL base depende del despliegue, por ejemplo `http://localhost:8000` detrás
-del gateway. `Token` es el header de integración existente: su validación
-determina el ambiente autorizado. No enviar aplicación o ambiente por query.
-El flujo de identidad externa existente también se conserva, cuando está
-habilitado; no se incorpora un nuevo mecanismo de autenticación.
+del gateway. El componente externo de seguridad autentica y autoriza la petición.
+El navegador administrativo conserva la sesión BFF y sus cookies; los servicios
+consumidores deben acordar sus credenciales y permisos con el responsable de seguridad.
+No se emiten credenciales en MessageUcoLab ni se acepta el header propietario retirado.
+En el flujo predeterminado de sesión BFF, `X-Application-Id` debe corresponder a una aplicación de una
+organización propiedad del usuario autenticado y `X-Environment-Id` a un ambiente de esa aplicación. El ambiente se pasa
+explícitamente a la operación, no forma parte de `MessageAccessContext` ni se usa
+para inferir la aplicación. Se validan su UUID, existencia y pertenencia antes de
+consultar el mensaje. Este flujo no necesita perfiles de activación ni banderas
+del frontend; no existe un destino fijo de desarrollo.
+
+Las aplicaciones de negocio tienen UUID propios, no los de las aplicaciones de
+seguridad. Este modelo personal no implementa credenciales máquina-a-máquina ni
+autoriza consumidores sin identidad BFF; esa evolución requiere un contrato
+explícito, sin compartir la sesión del propietario. Ver [espacios personales](personal-workspaces.md).
 
 ## Respuesta exitosa: HTTP 200
 
@@ -51,7 +63,7 @@ consumidores y conservar la comprobación de disponibilidad en cada petición.
 - `400`: falta el parámetro `code`.
 - Código vacío: se aplica el validador de códigos existente y su respuesta de dominio.
 - `401`: credencial ausente o inválida.
-- `403`: identidad sin permiso `MESSAGE_READ`, cuando utiliza el flujo de identidad externa.
+- `403`: sesión o identidad sin permiso para consultar mensajes.
 - `404`: mensaje inexistente, inactivo, deshabilitado para el ambiente o de otra aplicación.
 - `500`: fallo técnico; no se presenta como mensaje inexistente.
 

@@ -4,7 +4,7 @@ import co.edu.uco.application.secondaryports.entity.MessageData;
 import co.edu.uco.application.secondaryports.repository.DataBaseMessageRepository;
 import co.edu.uco.application.secondaryports.repository.SimplePage;
 import co.edu.uco.application.secondaryports.repository.SimplePageRequest;
-import co.edu.uco.application.secondaryports.repository.token.PageBuilder;
+import co.edu.uco.application.secondaryports.repository.PageBuilder;
 import org.springframework.stereotype.Component;
 
 import java.util.Optional;
@@ -37,5 +37,17 @@ public final class DatabaseMessageCatalog extends DatabaseCatalog {
     @Override
     public Optional<MessageData> getMessageByCodeAndEnvironment(String code, String environmentId) {
         return repository.findMessageByCodeAndEnvironment(code, environmentId);
+    }
+
+    @Override
+    public SimplePage<MessageData> getMessagesWithApplication(String applicationId, SimplePageRequest request) {
+        var filter = request.getFilter();
+        return repository.findMessagesByApplication(applicationId,
+                filter == null ? null : filter.getEnvironmentIds(), PageBuilder.createPageRequest(request), filter);
+    }
+
+    @Override
+    public Optional<MessageData> getMessageByCodeAndApplication(String code, String applicationId) {
+        return repository.findByCodeAndApplication(code, applicationId);
     }
 }

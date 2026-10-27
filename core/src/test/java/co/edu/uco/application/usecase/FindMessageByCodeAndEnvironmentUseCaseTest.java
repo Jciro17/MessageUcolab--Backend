@@ -8,7 +8,6 @@ import co.edu.uco.application.secondaryports.logging.LoggingPort;
 import co.edu.uco.application.secondaryports.logging.LoggingPortFactory;
 import co.edu.uco.application.usecase.domain.MessageDomain;
 import co.edu.uco.application.usecase.domain.security.MessageAccessContext;
-import co.edu.uco.application.usecase.domain.security.PermissionCode;
 import co.edu.uco.application.usecase.security.MessageEnvironmentResolver;
 import co.edu.uco.application.usecase.validator.message.FindMessageCodeValidator;
 import co.edu.uco.crosscutting.catalog.MessageCatalogCodeEnum;
@@ -31,7 +30,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class FindMessageByCodeAndEnvironmentUseCaseTest {
 
-    private static final MessageAccessContext ACCESS_CONTEXT = new MessageAccessContext("env", null);
+    private static final MessageAccessContext ACCESS_CONTEXT = new MessageAccessContext("app-1");
 
     @Mock
     private MessageCatalogStrategy messageCatalogStrategy;
@@ -53,14 +52,14 @@ class FindMessageByCodeAndEnvironmentUseCaseTest {
         when(loggerFactory.getLogger(FindMessageByCodeAndEnvironmentUseCase.class)).thenReturn(log);
         useCase = new FindMessageByCodeAndEnvironmentUseCase(
                 messageCatalogStrategy, findMessageCodeValidator, entityMapper, environmentResolver, loggerFactory);
-        when(environmentResolver.resolve(ACCESS_CONTEXT, PermissionCode.MESSAGE_READ)).thenReturn("env");
+        when(environmentResolver.resolveApplication(ACCESS_CONTEXT)).thenReturn("env");
     }
 
     @Test
     void execute_returnsMappedDto_whenMessageExists() {
         MessageData message = new MessageData();
         MessageDTO dto = MessageDTO.create("CODE", "Title", "Content", "type", "category", "func");
-        when(messageCatalogStrategy.getMessageByCodeAndEnvironment("CODE", "env"))
+        when(messageCatalogStrategy.getMessageByCodeAndApplication("CODE", "env"))
                 .thenReturn(Optional.of(message));
         when(entityMapper.mapperDTO(message)).thenReturn(dto);
 
@@ -71,7 +70,7 @@ class FindMessageByCodeAndEnvironmentUseCaseTest {
 
     @Test
     void execute_throwsBusinessException_whenMessageNotFound() {
-        when(messageCatalogStrategy.getMessageByCodeAndEnvironment("CODE", "env"))
+        when(messageCatalogStrategy.getMessageByCodeAndApplication("CODE", "env"))
                 .thenReturn(Optional.empty());
         when(messageCatalogStrategy.getSystemMessageContent(MessageCatalogCodeEnum.FUN_012.getCode()))
                 .thenReturn("Message %s not found in environment %s");
@@ -84,7 +83,7 @@ class FindMessageByCodeAndEnvironmentUseCaseTest {
 
     @Test
     void execute_throwsBusinessException_whenUnexpectedExceptionOccurs() {
-        when(messageCatalogStrategy.getMessageByCodeAndEnvironment("CODE", "env"))
+        when(messageCatalogStrategy.getMessageByCodeAndApplication("CODE", "env"))
                 .thenThrow(new IllegalStateException("boom"));
         when(messageCatalogStrategy.getSystemMessageContent(MessageCatalogCodeEnum.FUN_012.getCode()))
                 .thenReturn("Message %s not found in environment %s");

@@ -2,13 +2,11 @@ package co.edu.uco.infraestructure.primaryadapters;
 
 import co.edu.uco.application.primaryports.dto.message.CreateMessageDTO;
 import co.edu.uco.application.primaryports.dto.message.TranslateMessageDTO;
-import co.edu.uco.application.primaryports.dto.token.CreateTokenDTO;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -38,13 +36,21 @@ class MessageEndpointsRequestMappingTest {
             Method method = MessagesController.class.getMethod("findByEnvironmentAndMessage",
                     String.class, String.class, String.class, String.class,
                     String.class, String.class, String.class, String.class, String.class, String.class,
-                    ServerWebExchange.class);
+                    String.class, String.class, String.class, ServerWebExchange.class);
             GetMapping mapping = method.getAnnotation(GetMapping.class);
+            RequestParam statusId = parameterAnnotation(method, 11, RequestParam.class);
+            RequestParam functionalityId = parameterAnnotation(method, 12, RequestParam.class);
 
             assertThat(mapping).isNotNull();
+            assertThat(statusId).isNotNull();
+            assertThat(functionalityId).isNotNull();
             assertAll(
                     () -> assertThat(mapping.params()).containsExactly("!code"),
-                    () -> assertThat(mapping.value()).isEmpty());
+                    () -> assertThat(mapping.value()).isEmpty(),
+                    () -> assertThat(statusId.value()).isEqualTo("filterStatusId"),
+                    () -> assertThat(statusId.required()).isFalse(),
+                    () -> assertThat(functionalityId.value()).isEqualTo("filterFunctionalityId"),
+                    () -> assertThat(functionalityId.required()).isFalse());
         }
 
         @Test
@@ -102,34 +108,6 @@ class MessageEndpointsRequestMappingTest {
                     () -> assertThat(mapping.value()).isEmpty(),
                     () -> assertThat(mapping.consumes()).containsExactly("application/json"),
                     () -> assertThat(method.getParameters()[0].getType()).isEqualTo(CreateMessageDTO.class));
-        }
-    }
-
-    @Nested
-    class TokenControllerEndpoints {
-
-        @Test
-        void classMapping_isAnchoredToTheV1ApplicationResource() {
-            RequestMapping mapping = TokenController.class.getAnnotation(RequestMapping.class);
-
-            assertThat(mapping).isNotNull();
-            assertThat(mapping.value()).containsExactly("${crosswords.api.path.application}");
-        }
-
-        @Test
-        void createTokenEndpoint_keepsApplicationIdPathVariableAndBody() throws NoSuchMethodException {
-            Method method = TokenController.class.getMethod("createToken",
-                    CreateTokenDTO.class, String.class, ServerWebExchange.class);
-            PostMapping mapping = method.getAnnotation(PostMapping.class);
-            RequestBody bodyParameter = parameterAnnotation(method, 0, RequestBody.class);
-            PathVariable applicationIdParameter = parameterAnnotation(method, 1, PathVariable.class);
-
-            assertThat(mapping).isNotNull();
-            assertThat(bodyParameter).isNotNull();
-            assertThat(applicationIdParameter).isNotNull();
-            assertAll(
-                    () -> assertThat(mapping.value()).containsExactly("${crosswords.api.path.token.application}"),
-                    () -> assertThat(method.getParameters()[1].getType()).isEqualTo(String.class));
         }
     }
 

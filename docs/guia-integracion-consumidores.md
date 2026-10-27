@@ -1,149 +1,416 @@
 # Guía de integración: consumir el componente de mensajes (MessageUcoLab)
 
-Esta guía es para los equipos que van a **usar** el componente de mensajes desde su aplicación
-(Asistencia, Parámetros, Seguridad u otra). Explica cómo reemplazar los textos escritos en el
-código por mensajes administrados en MessageUcoLab, cómo autenticarse y qué hacer cuando algo
-falla.
+Esta guía es para los equipos del semillero que van a **usar** el componente de mensajes desde su
+aplicación (Asistencia, Parámetros, Seguridad u otra). Síganla en orden: cada paso dice qué hacer,
+cómo comprobar que quedó bien y qué hacer si algo falla.
 
-Todo lo que aparece aquí se verificó contra el backend en ejecución (rama `develop`, Java 25).
-Si algo no se comporta como se describe, avísenle al equipo de mensajes.
+> Los valores entre `<...>` se reemplazan: `<VERSION>` es la versión publicada de MessageUcoLab y
+> `<ORGANIZACION_GITHUB>` es la organización de GitHub del equipo de mensajes. Ambos los entrega el
+> equipo de mensajes.
+
+> Las capturas de esta guía usan **Inventario UCO**, una aplicación de ejemplo que ya consume
+> MessageUcoLab. En tu caso verás el nombre de tu aplicación en lugar de "Inventario UCO".
 
 ---
 
-## 1. Idea general
+## 1. Qué es MessageUcoLab y qué vas a lograr
 
-Hoy su aplicación tiene textos escritos en el código:
+Hoy tu aplicación tiene textos escritos directamente en el código:
 
 ```java
 return "Los cambios se guardaron correctamente.";
 ```
 
-Con MessageUcoLab, ese texto vive en el componente y su aplicación lo pide por un **código**:
+MessageUcoLab guarda esos textos en un solo lugar, y tu aplicación los pide por un **código**:
 
 ```java
-return mensajes.get("MSG_PRODSAVED");   // el texto lo administra MessageUcoLab
+return mensajes.get("MSG_PRODSAVED");
 ```
 
-Así se puede cambiar el texto, corregirlo o traducirlo **sin volver a desplegar su aplicación**.
+Así puedes corregir, cambiar o traducir un texto **sin volver a desplegar tu aplicación**.
 
-La consulta se hace **de backend a backend**. El navegador de sus usuarios nunca llama a
-MessageUcoLab directamente, y el token de integración nunca se envía al frontend.
-
----
-
-## 2. Conceptos que deben conocer
+### Cómo encajan las piezas
 
 ```
-Organización
- └─ Aplicación          (por ejemplo "Asistencia")
-     ├─ Ambientes       Develop, Testing y Production, que se crean solos con la aplicación
-     ├─ Funcionalidades agrupan los mensajes (por ejemplo "Registro de asistencia")
-     └─ Mensajes        código + título + contenido + tipo + categoría + estado
+                 ┌───────────────────────────────┐
+  Tu front ─────▶│  Pantalla de administración   │  (minifront-mensajes, montado en tu front)
+  (personas)     │  crear y editar mensajes      │──┐
+                 └───────────────────────────────┘  │
+                                                    ▼
+  Tu backend ──── encabezado Token ──────────▶  MessageUcoLab (API)  ──▶  SurrealDB / Redis
+  (sin personas)  "dame MSG_PRODSAVED"           corre en tu máquina con Docker
 ```
 
-- **Código:** identifica el mensaje. Siempre empieza por `MSG_` y está en mayúsculas,
-  por ejemplo `MSG_PRODSAVED`. Al crear el mensaje solo se escribe el sufijo (`PRODSAVED`):
-  máximo 10 caracteres, solo letras, números y espacios. El componente le agrega `MSG_`.
-- **El código es único por aplicación.** Dos aplicaciones distintas pueden tener cada una su
-  `MSG_PRODSAVED` sin chocar.
-- **Un mensaje se crea en un ambiente.** Si se crea en Develop, solo está disponible en Develop
-  (ver la sección 9).
-- **Estado:** solo se entregan mensajes en estado **Active**. Un mensaje Inactive responde como
-  si no existiera (404).
+- **Las personas** administran los mensajes desde una pantalla que montas dentro de tu front
+  (pasos 3 y 4). No necesitan escribir comandos.
+- **Tu backend** pide los mensajes de servidor a servidor con un **token de integración** (pasos 5
+  y 6). El navegador de tus usuarios nunca llama a MessageUcoLab directamente.
 
----
+### Lo que vas a hacer
 
-## 3. Qué necesitan antes de empezar
-
-| Dato | Ejemplo | Quién se lo da |
+| Paso | Qué haces | Tiempo aproximado |
 |---|---|---|
-| URL base del componente | `http://localhost:8000` (gateway Kong) o `http://localhost:8085` (directo) | Equipo de mensajes |
-| Su aplicación registrada en MessageUcoLab, con al menos una funcionalidad | `Asistencia` | Equipo de mensajes (o ustedes desde el widget de administración) |
-| Un **token de integración** por cada ambiente que vayan a usar | Develop, Testing, Production | Equipo de mensajes |
-
-> **Mientras se integra el componente de seguridad**, el registro de aplicaciones y la generación
-> de tokens los hace el equipo de mensajes. Pídanlos indicando el nombre exacto de su aplicación,
-> los ambientes que necesitan y hasta qué fecha debe valer cada token.
-
-**Ustedes no necesitan Doppler ni ninguna variable de MessageUcoLab para consumirlo.** Doppler
-solo hace falta si van a levantar el componente en su máquina (sección 8).
+| 2 | Levantar MessageUcoLab en tu máquina | 15 min (la primera vez descarga imágenes) |
+| 3 | Montar la pantalla de administración en tu front | 15 min |
+| 4 | Registrar tu aplicación y crear tus mensajes desde esa pantalla | 10 min |
+| 5 | Obtener tu token de integración | 5 min |
+| 6 | Consumir los mensajes desde tu backend | 20 min |
+| 7 | Verificar que todo funciona, incluso si MessageUcoLab falla | 10 min |
 
 ---
 
-## 4. Paso a paso: reemplazar un texto escrito en el código
+## 2. Levantar MessageUcoLab en tu máquina
 
-### 4.1 Crear el mensaje
+> **Por ahora no existe un ambiente compartido**, así que cada equipo levanta MessageUcoLab en su
+> propia máquina. No necesitas clonar el repositorio del backend ni compilar nada: descargas un
+> archivo y ejecutas imágenes ya publicadas. Cuando exista un ambiente compartido, este paso
+> desaparece y solo necesitarás su URL.
 
-Desde el widget o el minifront de administración, en **su aplicación y su ambiente**:
+### 2.1 Requisitos
 
-| Campo | Regla |
-|---|---|
-| Código | Solo el sufijo, máximo 10 caracteres, letras, números y espacios. `PRODSAVED` se guarda como `MSG_PRODSAVED` |
-| Título | Entre 10 y 50 caracteres |
-| Contenido | Entre 10 y 100 caracteres. Puede tener marcadores como `{nombre}` (ver 4.4) |
-| Tipo, categoría, funcionalidad | Obligatorios |
-| Estado | **Active**, o no se entregará |
+- **Docker Desktop** en ejecución, con Docker Compose v2.
+- **Doppler CLI** instalado: <https://docs.doppler.com/docs/install-cli>.
+- **Una cuenta gratuita de Doppler** (es tuya; el equipo de mensajes no te entrega secretos).
+- **Node.js 18 o superior**, para la pantalla de administración del paso 3.
+- Puertos libres: `8085` (API), `5176` (pantalla de administración), `8005` (SurrealDB), `6379`
+  (Redis), `8080` y `6800` (Pulsar) y, si usas traducción, `11434` (Ollama).
 
-### 4.2 Guardar el token como secreto
+### 2.2 Descargar el archivo de despliegue
 
-El token es una cadena larga (unos 344 caracteres). Trátenlo como una contraseña:
+1. Crea una carpeta **fuera** del repositorio de tu aplicación, por ejemplo `messageucolab-local`.
+2. Abre en el navegador la página de releases del componente:
+   <https://github.com/CamiloGarcia09/NosGraduamos-FC/releases>.
+3. En la versión `v<VERSION>`, descarga el archivo `compose.yaml` y guárdalo en esa carpeta.
 
-- Guárdenlo en el gestor de secretos de su equipo (Doppler, Azure Key Vault, etc.) y léanlo
-  como variable de entorno, por ejemplo `MESSAGEUCOLAB_TOKEN`.
-- **No** lo escriban en el código, en `application.properties` ni en `application.yml` con un
-  valor por defecto, ni lo suban a Git.
-- **No** lo envíen al navegador.
-- Un token sirve para **una aplicación y un ambiente**. Para Develop y Production necesitan dos
-  tokens distintos.
+Este archivo no contiene contraseñas.
 
-### 4.3 Pedir el mensaje
+### 2.3 Crear tus secretos en Doppler (manual)
 
-```http
-GET {URL_BASE}/messageucolab/v1/messages/resolve?code=MSG_PRODSAVED
-Accept: application/json
-Token: <su-token-de-integracion>
+En el semillero **las contraseñas nunca se escriben en archivos**: viven en Doppler. Como la base de
+datos y Redis corren en tu máquina, **tú inventas las contraseñas**; no tienen que coincidir con
+las de ningún otro equipo.
+
+1. En <https://dashboard.doppler.com> crea un proyecto llamado `messageucolab-local`. Doppler crea
+   automáticamente la configuración `dev`.
+2. Entra a la configuración `dev` y agrega **estos 4 secretos** con **Add Secret**:
+
+| Secreto | Qué poner | Ejemplo de formato |
+|---|---|---|
+| `SURREALDBUSER` | Un nombre de usuario para la base de datos | `admin` |
+| `SURREALDBPASSWORD` | Una contraseña que inventes, de 16 caracteres o más | (no la compartas) |
+| `REDISPASSWORD` | Otra contraseña que inventes, de 16 caracteres o más | (no la compartas) |
+| `SIMULATED_SECURITY_TOKEN` | Un texto largo que inventes. Es la "llave" para administrar mensajes mientras se integra el componente de seguridad | (no la compartas) |
+
+3. Guarda los cambios (**Save**).
+4. En una terminal, dentro de la carpeta `messageucolab-local`, inicia sesión y vincula la carpeta
+   con el proyecto:
+   ```bash
+   doppler login
+   doppler setup --project messageucolab-local --config dev
+   ```
+
+> Todo lo demás (puertos, nombres de la base de datos, configuración de traducción) ya viene con
+> valores por defecto en el `compose.yaml`. No agregues más secretos salvo que esta guía lo indique.
+
+### 2.4 Levantar los servicios
+
+En la misma terminal:
+
+```bash
+doppler run -- docker compose up -d
 ```
 
-No envíen el nombre de la aplicación ni el ambiente: **el token ya los define**.
+La primera vez tarda varios minutos porque descarga las imágenes. Doppler inyecta los secretos en
+memoria al arrancar; nunca quedan escritos en un archivo. En **Docker Desktop → Containers** verás
+los servicios del proyecto en estado *Running*.
 
-Respuesta exitosa (HTTP 200):
+Si además vas a usar la **traducción con IA** (opcional), levanta también el perfil `traduccion`.
+Descarga un modelo de unos 2 GB la primera vez:
 
-```json
-{
-  "data": [
-    {
-      "code": "MSG_PRODSAVED",
-      "title": "Producto guardado",
-      "content": "El producto {nombre} se guardó correctamente."
-    }
-  ],
-  "errors": []
+```bash
+doppler run -- docker compose --profile traduccion up -d
+```
+
+### 2.5 Comprobar que quedó arriba
+
+Abre en el navegador <http://localhost:8085/actuator/health>. Debes ver `{"status":"UP"}`:
+
+![El navegador muestra el estado UP de MessageUcoLab](img/guia/01-health.png)
+
+| Si ves… | Qué hacer |
+|---|---|
+| "No se puede acceder a este sitio" | Espera un minuto más; la API arranca después de la base de datos |
+| Un servicio en *Exited* en Docker Desktop | Abre sus registros (*Logs*) y revisa que los 4 secretos existan en Doppler |
+| `port is already allocated` al levantar | Otro programa usa ese puerto; ciérralo o cambia el puerto en `compose.yaml` |
+
+> **Cuidado:** `docker compose down -v` **borra todos los datos** (aplicaciones, mensajes y
+> tokens). Para apagar sin perder nada usa `docker compose down`, sin `-v`.
+
+---
+
+## 3. Montar la pantalla de administración en tu front
+
+La pantalla de administración es un **microfrontend** llamado `minifront-mensajes`. Lo montas dentro
+de tu front y desde ahí tu equipo registra la aplicación y crea, edita, consulta y traduce mensajes.
+Funciona igual en Vue, React, Angular o HTML, y sus estilos no se mezclan con los tuyos.
+
+### 3.1 Obtener y levantar la pantalla
+
+Clona el repositorio **fuera** de tu proyecto y levántalo:
+
+```bash
+git clone https://github.com/<ORGANIZACION_GITHUB>/minifront-mensajes.git
+cd minifront-mensajes
+npm install
+npm run serve
+```
+
+`npm install` se ejecuta una sola vez. Deja esa terminal abierta mientras uses la pantalla. Para
+comprobar que responde, abre <http://localhost:5176/messageucolab.js> en el navegador: debe mostrar
+código JavaScript.
+
+### 3.2 Reenviar las llamadas a la API (evita problemas de CORS)
+
+La API de MessageUcoLab no publica encabezados CORS. En desarrollo, haz que el servidor de tu front
+reenvíe `/messageucolab` a la API, para que el navegador lo vea como el mismo origen.
+
+**Vite** (`vite.config.js`):
+
+```js
+server: {
+  proxy: { '/messageucolab': { target: 'http://localhost:8085', changeOrigin: true } }
 }
 ```
 
-El mensaje viene en `data[0]`. Prueba rápida desde la terminal:
+**Angular** (`proxy.conf.json`, y `ng serve --proxy-config proxy.conf.json`):
+
+```json
+{ "/messageucolab": { "target": "http://localhost:8085", "secure": false, "changeOrigin": true } }
+```
+
+### 3.3 Montar la pantalla
+
+Crea una ruta (por ejemplo `/mensajes`) con un contenedor vacío y monta la pantalla:
+
+```js
+const remote = await import(/* @vite-ignore */ 'http://localhost:5176/messageucolab.js');
+
+const widget = remote.mount(document.querySelector('#mensajes'), {
+  apiBaseUrl: '/messageucolab',
+  getToken: () => import.meta.env.VITE_MESSAGEUCOLAB_ADMIN_TOKEN,
+  title: 'Mensajes de Asistencia',
+  theme: { accent: '#116149', radius: '12px' }
+});
+
+// al salir de la pantalla
+widget.unmount();
+```
+
+`VITE_MESSAGEUCOLAB_ADMIN_TOKEN` es el mismo `SIMULATED_SECURITY_TOKEN` del paso 2.3. Para no
+escribirlo en un archivo, inyéctalo desde Doppler al arrancar tu front:
 
 ```bash
-curl -s "http://localhost:8000/messageucolab/v1/messages/resolve?code=MSG_PRODSAVED" -H "Token: $MESSAGEUCOLAB_TOKEN"
+doppler run --project messageucolab-local --config dev -- \
+  bash -c 'VITE_MESSAGEUCOLAB_ADMIN_TOKEN=$SIMULATED_SECURITY_TOKEN npm run dev'
 ```
 
-### 4.4 Marcadores dentro del contenido
+Abre la ruta `/mensajes` de tu front. Si todo quedó bien, la pantalla te pide escoger un espacio de
+trabajo (organización, aplicación y ambiente):
 
-MessageUcoLab entrega el texto **tal cual**, con los marcadores sin reemplazar. Su aplicación
-los reemplaza:
+![La pantalla de administración montada dentro de la aplicación consumidora](img/guia/02-widget-contexto.png)
+
+| Si ves… | Qué hacer |
+|---|---|
+| "No se pudo cargar el microfrontend" | La terminal de `npm run serve` (paso 3.1) está cerrada |
+| La pantalla carga pero dice que no hay contextos | La llave de administración no coincide con `SIMULATED_SECURITY_TOKEN`: revisa cómo arrancaste tu front |
+| Error de red o CORS en la consola del navegador | Falta el reenvío del paso 3.2 o no reiniciaste tu front después de agregarlo |
+
+> **Temporal:** esta llave de administración existe solo mientras se integra el componente de
+> seguridad. Cuando esté integrado, las personas iniciarán sesión con su cuenta del semillero y esta
+> opción desaparecerá.
+
+---
+
+## 4. Registrar tu aplicación y crear tus mensajes
+
+Todo este paso se hace **desde la pantalla** que montaste en el paso 3. Se hace **una sola vez** por
+aplicación.
+
+### 4.1 Conceptos que necesitas
 
 ```
-Contenido guardado:  "Quedan {cantidad} unidades de {nombre}."
-Su aplicación:       "Quedan 3 unidades de Teclado."
+Organización (UCO)
+ └─ Aplicación           tu sistema, por ejemplo "Asistencia UCO"
+     ├─ Ambientes        Develop, Testing y Production: se crean solos con la aplicación
+     ├─ Funcionalidades  agrupan mensajes por tema, por ejemplo "Asistencia"
+     └─ Mensajes         código + título + contenido + tipo + categoría + estado
 ```
 
-Usen nombres simples entre llaves y documenten qué marcadores espera cada código.
+- El **código** siempre empieza por `MSG_`. Escribes solo el sufijo (`ASISOK`) y queda
+  `MSG_ASISOK`. Máximo 10 caracteres: letras, números y espacios.
+- El código es **único dentro de tu aplicación**.
+- Un mensaje se crea en **un ambiente**: el que tengas seleccionado arriba a la derecha.
+- Solo se entregan mensajes en estado **Active**.
 
-### 4.5 Ejemplo completo en Java (Spring WebFlux)
+### 4.2 Registrar tu aplicación
 
-Este cliente pide el mensaje, lo guarda en caché y, si MessageUcoLab falla, usa el texto que
-antes estaba escrito en el código. **Nunca lanza una excepción** hacia la lógica de negocio.
-Está basado en el cliente de referencia de InventarioWebFlux.
+1. En la pantalla de selección, pulsa **Usar este** en cualquier espacio de trabajo de la
+   organización UCO.
+2. Abre la pestaña **Configuración** y baja hasta **Registrar otra aplicación**.
+3. Escribe el nombre de tu aplicación, elige el idioma base y el estado **Activa**, y pulsa
+   **Crear aplicación**.
+
+![Pestaña Configuración: funcionalidades y registro de una aplicación nueva](img/guia/04-widget-configuracion.png)
+
+MessageUcoLab crea la aplicación con sus tres ambientes: Develop, Testing y Production.
+
+### 4.3 Seleccionar tu aplicación y su ambiente
+
+Pulsa **Cambiar**, arriba a la derecha, y elige tu aplicación en el ambiente **Develop**. El
+encabezado muestra siempre en qué organización, aplicación y ambiente estás trabajando:
+
+![Lista de mensajes del ambiente seleccionado](img/guia/03-widget-lista.png)
+
+La primera vez la lista estará vacía. Los íconos de cada fila sirven para **ver**, **editar** y
+**eliminar** un mensaje.
+
+### 4.4 Crear una funcionalidad
+
+En la pestaña **Configuración** (la misma de la figura del paso 4.2), escribe el nombre en **Nueva
+funcionalidad**, deja el estado **Activa** y pulsa **Crear funcionalidad**. Aparece como una
+etiqueta debajo del título.
+
+### 4.5 Crear un mensaje
+
+Haz primero una lista de los textos que hoy están escritos en tu código: el código que les vas a
+dar, el texto actual y dónde se usan. Luego créalos uno por uno en la pestaña **Crear mensaje**:
+
+![Formulario para crear un mensaje](img/guia/06-widget-crear-lleno.png)
+
+| Campo | Regla |
+|---|---|
+| Código | Solo el sufijo, máximo 10 caracteres. Debajo ves cómo quedará guardado (`MSG_ASISOK`) |
+| Funcionalidad | La del paso 4.4 |
+| Tipo | **Functional** para textos que ven tus usuarios; **Technical** para mensajes internos |
+| Categoría | Information, Confirmation, Warning, Error o Debug |
+| Estado | **Active** para que se entregue a tu backend |
+| Título | Entre 10 y 50 caracteres |
+| Contenido | Entre 10 y 100 caracteres. Puede tener marcadores como `{estudiante}` |
+
+Pulsa **Crear mensaje**. El mensaje aparece en la pestaña **Mensajes**.
+
+> Los **marcadores** como `{estudiante}` permiten mensajes dinámicos. MessageUcoLab los entrega sin
+> reemplazar; tu aplicación los reemplaza con los datos reales (paso 6).
+
+### 4.6 Fijar la pantalla a tu aplicación
+
+Cuando tu aplicación ya existe, vuelve al código del paso 3.3 y agrega estas opciones para que tu
+equipo trabaje siempre sobre ella y no pueda registrar otras:
+
+```js
+  applicationName: 'Asistencia UCO',   // el nombre EXACTO del paso 4.2
+  environmentName: 'Develop',
+  lockContext: true,                   // oculta el botón Cambiar
+  allowApplicationCreation: false,     // oculta "Registrar otra aplicación"
+```
+
+---
+
+## 5. Obtener tu token de integración
+
+### 5.1 Para qué sirve
+
+Tu backend necesita demostrar **qué aplicación** pide los mensajes y **de qué ambiente**. El token
+de integración lleva esas dos cosas por dentro. Por eso:
+
+- **No envías el nombre de la aplicación ni el ambiente** en cada petición; el token ya los define.
+- Necesitas **un token por cada ambiente** que uses: uno para Develop, otro para Production.
+
+> **¿Por qué no basta con el componente de seguridad?** Seguridad identifica **personas** que
+> inician sesión. Cuando tu backend pide `MSG_ASISOK` para mostrárselo a un estudiante, no hay ninguna
+> persona administrando mensajes: es tu sistema hablando con otro sistema. Además, la sesión de una
+> persona no dice de qué **ambiente** entregar los mensajes. Para eso existe el token de integración.
+
+### 5.2 Generarlo
+
+Este es el **único paso que todavía se hace por terminal**: la pantalla de administración aún no
+tiene un botón para generar tokens. Usa **Git Bash** en Windows. Son dos comandos.
+
+1. Consulta los identificadores de tu aplicación y de su ambiente:
+   ```bash
+   doppler run -- bash -c 'curl -s http://localhost:8085/messageucolab/v1/me/contexts \
+     -H "Authorization: Bearer $SIMULATED_SECURITY_TOKEN"'
+   ```
+   Busca tu aplicación en la respuesta y anota el `id` de la aplicación y el `id` del ambiente
+   **Develop**.
+2. Genera el token, reemplazando los dos identificadores:
+   ```bash
+   doppler run -- bash -c 'curl -s -X POST http://localhost:8085/messageucolab/v1/application/<ID_APLICACION>/token \
+     -H "Authorization: Bearer $SIMULATED_SECURITY_TOKEN" -H "Content-Type: application/json" \
+     -d "{\"expirationDate\":\"2027-01-01T00:00:00\",\"environmentId\":\"<ID_AMBIENTE_DEVELOP>\"}"'
+   ```
+
+- La respuesta trae el token en `data[0]`. Es una cadena de unos 344 caracteres y **se muestra una
+  sola vez**.
+- `expirationDate` usa el formato `AAAA-MM-DDTHH:mm:ss` y debe ser una fecha futura.
+
+### 5.3 Guardarlo
+
+Guárdalo **en el Doppler de tu aplicación** (no en el de MessageUcoLab) como `MESSAGEUCOLAB_TOKEN`,
+y que tu backend lo lea como variable de entorno. Nunca lo escribas en el código, en
+`application.properties` ni en un `.env`, y nunca lo envíes al navegador.
+
+### 5.4 Reglas que debes conocer
+
+| Regla | Consecuencia |
+|---|---|
+| Un token sirve para una aplicación y un ambiente | Para Develop y Production necesitas dos tokens |
+| Solo hay un token activo por ambiente | Generar uno nuevo **revoca el anterior al instante** |
+| El token vence en la fecha indicada | Desde ese momento responde 401; genera uno nuevo con tiempo |
+| Si se filtra | Genera uno nuevo: el filtrado deja de servir |
+
+---
+
+## 6. Consumir los mensajes desde tu backend
+
+### 6.1 Ver lo que recibirá tu backend
+
+Antes de escribir código, confirma que el mensaje se entrega. En la pestaña **Consultar** escribe
+el código y pulsa **Consultar**; luego pulsa **Probar como consumidor**:
+
+![Pestaña Consultar: detalle del mensaje y respuesta del endpoint de consumo](img/guia/07-widget-consultar.png)
+
+El recuadro oscuro inferior es exactamente lo que recibirá tu backend: `code`, `title` y `content`.
+Si en vez de eso ves un error, revisa que el mensaje esté en estado **Active** y en el ambiente
+correcto.
+
+### 6.2 Agregar el cliente a tu backend (Spring WebFlux)
+
+Este cliente pide el mensaje, lo guarda en caché y, si MessageUcoLab falla, usa el texto que antes
+estaba escrito en tu código. **Nunca lanza una excepción** hacia tu lógica de negocio.
+
+`application.yml`:
+
+```yaml
+messageucolab:
+  url: ${MESSAGEUCOLAB_URL:http://localhost:8085}
+# MESSAGEUCOLAB_TOKEN se lee del entorno (Doppler); no le pongas valor por defecto
+```
+
+Imports:
+
+```java
+import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
+import java.time.Duration;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+```
+
+Clase:
 
 ```java
 @Service
@@ -214,258 +481,149 @@ public class MensajesClient {
 }
 ```
 
-Uso:
+Cómo adaptarlo:
+
+- En `RESPALDO` pon **todos** los textos que hoy están escritos en tu código, con su código `MSG_`.
+- Si no usas Spring WebFlux, replica la misma lógica en tu tecnología: encabezado `Token`, timeout
+  corto, caché y texto de respaldo.
+
+### 6.3 Reemplazar cada texto escrito en el código
 
 ```java
-return mensajes.get("MSG_PRODSAVED", Map.of("nombre", producto.getNombre()));
+// ANTES
+return "La asistencia quedó registrada.";
+
+// DESPUÉS
+return mensajes.get("MSG_ASISOK", Map.of("estudiante", estudiante.getNombre()));
 ```
 
-Este ejemplo se compiló y ejecutó con Java 25 contra el componente real, en cinco escenarios:
-mensaje encontrado (con el marcador reemplazado), segunda consulta desde la caché, token
-inválido (401), componente apagado y código inexistente (404). En los tres últimos devolvió el
-texto de respaldo sin lanzar excepciones.
+Reemplaza los textos **de uno en uno** y prueba cada cambio. Si algo falla, tu aplicación muestra el
+texto de respaldo, así que nunca queda rota.
 
-Recomendaciones:
+### 6.4 ¿Cuándo se ve un cambio?
 
-- **Siempre tengan un texto de respaldo.** Si MessageUcoLab no responde, su aplicación debe
-  seguir funcionando.
-- **Definan un timeout corto** (4 segundos en el ejemplo). La primera consulta después de que
-  MessageUcoLab arranca puede tardar más que eso; en ese caso se muestra el respaldo y las
-  siguientes consultas ya llegan normales.
-- **Usen caché.** No pidan el mismo mensaje en cada petición de sus usuarios.
-
-### 4.6 ¿Cuándo se ve el cambio?
-
-- MessageUcoLab entrega el mensaje **apenas se crea o se edita**: `/resolve` lee directamente de
-  la base de datos.
-- Lo que demora es la caché **de su aplicación**. Con los tiempos del ejemplo:
-  - Un mensaje que antes no existía aparece en máximo **30 segundos**.
-  - Un mensaje editado se actualiza en máximo **5 minutos**.
-- Si necesitan verlo de inmediato (por ejemplo, en una demostración), expongan un endpoint
-  interno que limpie su caché, como hace InventarioWebFlux con `POST /api/mensajes/limpiar-cache`.
+MessageUcoLab entrega el mensaje apenas se crea o se edita. Lo que demora es la caché **de tu
+aplicación**: un mensaje nuevo aparece en máximo **30 segundos** y uno editado en máximo **5
+minutos**. Si lo necesitas de inmediato, reinicia tu aplicación.
 
 ---
 
-## 5. Traducción (opcional)
+## 7. Verificar que todo funciona
 
-MessageUcoLab puede traducir un mensaje con IA:
+Arranca tu backend con Doppler (para que lea `MESSAGEUCOLAB_TOKEN`) y usa tu aplicación. Así se ve
+en Inventario UCO: al guardar un producto, el aviso es el mensaje `MSG_PRODSAVED` de MessageUcoLab,
+con el marcador `{nombre}` reemplazado por el producto real:
 
-```http
-POST {URL_BASE}/messageucolab/v1/messages/MSG_PRODSAVED/translations
-Content-Type: application/json
-Token: <su-token-de-integracion>
+![Aviso de la aplicación consumidora con el texto entregado por MessageUcoLab](img/guia/09-inventario-aviso.png)
 
-{ "sourceLanguage": "auto", "targetLanguage": "en" }
-```
+> **Consejo:** Inventario UCO indica debajo de cada aviso si el texto vino de MessageUcoLab o del
+> respaldo local. Mostrar o registrar ese origen en tu aplicación facilita mucho las pruebas.
 
-Respuesta (HTTP 200, resumida):
+Prueba estos cinco escenarios antes de dar por terminada la integración:
 
-```json
-{
-  "data": [{
-    "code": "MSG_PRODSAVED",
-    "translatedTitle": "Product Saved",
-    "translatedContent": "The product {name} was saved.",
-    "translationProvider": "langchain4j-ollama",
-    "translationElapsedMs": 14713
-  }],
-  "errors": []
-}
-```
+| # | Escenario | Cómo provocarlo | Resultado esperado |
+|---|---|---|---|
+| 1 | Mensaje encontrado | Usar la función que muestra el mensaje | Texto de MessageUcoLab, con los marcadores reemplazados |
+| 2 | Caché | Repetir la acción dos veces seguidas | La segunda respuesta es inmediata |
+| 3 | Token inválido | Cambiar temporalmente `MESSAGEUCOLAB_TOKEN` en Doppler | Texto de respaldo, sin errores |
+| 4 | MessageUcoLab apagado | Detener el contenedor `messageucolab` en Docker Desktop | Texto de respaldo tras el timeout |
+| 5 | Código inexistente | Pedir `MSG_NOEXISTE` | Texto de respaldo |
 
-Ténganlo en cuenta:
-
-- **Es lenta:** en local, con Ollama, tarda alrededor de 15 segundos. No la llamen en cada
-  petición de un usuario; traduzcan una vez y guarden el resultado.
-- **Puede traducir los marcadores** (`{nombre}` → `{name}`). Si usan marcadores, verifiquen la
-  traducción antes de usarla. Es un problema conocido (sección 10).
-- `targetLanguage` usa códigos de idioma: `en`, `es`, `fr` (los que ofrece la pantalla de
-  administración). Se verificó la traducción de español a `en`.
+> La primera consulta después de que MessageUcoLab arranca puede tardar más que el timeout de 4
+> segundos. En ese caso verás el respaldo; las siguientes consultas llegan normales.
 
 ---
 
-## 6. Errores
+## 8. Errores y preguntas frecuentes
 
-| HTTP | Cuándo pasa | Qué debe hacer su aplicación |
+### 8.1 Errores al consumir
+
+Revisa siempre el **código HTTP antes** de leer el cuerpo de la respuesta.
+
+| HTTP | Cuándo pasa | Qué hacer |
 |---|---|---|
 | 200 | Mensaje encontrado | Usar `data[0]` |
-| 401 | Token ausente, inválido, vencido o reemplazado por uno nuevo. **La respuesta llega sin cuerpo** | Usar el texto de respaldo y avisar al equipo: hay que renovar el token |
-| 404 | El código no existe en su aplicación y ambiente, está Inactive, o es de otra aplicación | Usar el texto de respaldo. Revisar el código y el ambiente |
-| 500 | Falla técnica. **Hoy también se recibe si falta el parámetro `code`** | Usar el texto de respaldo |
-| Sin respuesta | MessageUcoLab caído o timeout | Usar el texto de respaldo |
+| 401 | Token ausente, inválido, vencido o reemplazado. Llega **sin cuerpo** | Usar el respaldo y generar un token nuevo |
+| 404 | El código no existe en tu aplicación y ambiente, está Inactive o es de otra aplicación | Revisar el código exacto (con `MSG_`) y el ambiente del token |
+| 500 | Falla técnica. Hoy también ocurre si falta el parámetro `code` | Usar el respaldo |
+| Sin respuesta | MessageUcoLab apagado o lento | Usar el respaldo |
 
-Ejemplo de error 404:
+### 8.2 Preguntas frecuentes
 
-```json
-{
-  "data": [],
-  "errors": [{ "code": "NOT_FOUND", "message": "There is no message with the code MSG_X for the application ..." }],
-  "timestamp": "2026-10-19T20:27:37.553Z",
-  "path": "/messageucolab/v1/messages/resolve"
-}
-```
-
-Revisen siempre el código HTTP **antes** de leer `data`.
-
----
-
-## 7. Tokens de integración
-
-### 7.1 Cómo se generan
-
-Por ahora los genera el equipo de mensajes con este endpoint:
-
-```http
-POST {URL_BASE}/messageucolab/v1/application/{applicationId}/token
-Content-Type: application/json
-Authorization: Bearer <identidad-del-administrador>
-
-{ "expirationDate": "2027-01-01T00:00:00", "environmentId": "<id-del-ambiente>" }
-```
-
-- La respuesta trae el token en `data[0]`. **Se muestra una sola vez**; si se pierde, se genera
-  uno nuevo.
-- `expirationDate` usa el formato `yyyy-MM-dd'T'HH:mm:ss` y debe ser una fecha futura. Si no,
-  responde 422: *"The expiration date must be a date greater than today."*
-
-### 7.2 Reglas que deben conocer
-
-- **Un solo token activo por ambiente.** Generar uno nuevo **revoca el anterior de inmediato**:
-  el viejo empieza a responder 401. Si comparten un ambiente entre varios servicios, todos deben
-  actualizar el secreto al mismo tiempo.
-- **El token vence** en la fecha indicada y desde ese momento responde 401. Anoten la fecha y
-  pidan el nuevo con tiempo.
-- **Si el token se filtra**, pidan uno nuevo: al generarlo, el filtrado deja de servir.
-
-### 7.3 ¿Por qué un token y no la identidad de usuario (`Authorization: Bearer`)?
-
-El backend también acepta `Authorization: Bearer`, pero ese camino es para **personas** que
-administran mensajes. Con Bearer, el ambiente sale del **contexto que la persona eligió por
-última vez en la pantalla de administración**. Si alguien cambia de ambiente en el widget,
-los mensajes que ven los usuarios de su aplicación también cambian.
-
-Lo verificamos: después de cambiar el contexto del administrador a otra aplicación, la consulta
-con Bearer respondió 404 y la consulta con `Token` siguió devolviendo el mensaje correcto.
-**Para consumir mensajes desde su aplicación, usen siempre el encabezado `Token`.**
-
----
-
-## 8. Levantar MessageUcoLab en su máquina (solo si lo necesitan)
-
-Si solo consumen el componente desplegado por el equipo de mensajes, **salten esta sección**.
-
-### 8.1 ¿Qué es Doppler?
-
-Doppler es un gestor de secretos en la nube: guarda contraseñas y configuración fuera del
-código. MessageUcoLab lo usa de dos formas:
-
-1. **Para levantar el stack:** `doppler run -- docker compose up -d` inyecta las variables de
-   entorno que leen Docker Compose y la aplicación.
-2. **Para generar tokens de integración:** el backend guarda en Doppler la llave privada de cada
-   token, usando la variable `DOPPLERTOKEN`. Sin ella no se pueden generar tokens.
-
-El proyecto de Doppler es `messageucolab` con la configuración `dev`. Pídanle acceso al equipo
-de mensajes. Si usan su propio proyecto de Doppler, configuren `DOPPLER_PROJECT` y
-`DOPPLER_CONFIG`, y usen un `DOPPLERTOKEN` con permiso de escritura en esa configuración.
-
-### 8.2 Requisitos
-
-- Docker Desktop con Docker Compose v2
-- Doppler CLI con sesión iniciada (`doppler login`)
-- Puertos libres: 8085 (API), 8000 (gateway), 8005 (SurrealDB), 6379 (Redis), 8080 y 6800
-  (Pulsar), 11434 (Ollama), además de 3000, 3100, 9090, 14317 y 14318 si usan observabilidad
-
-No necesitan Java ni Maven: la imagen se compila dentro de Docker con Java 25.
-
-### 8.3 Variables
-
-| Grupo | Variables | Notas |
-|---|---|---|
-| Aplicación | `MESSAGEUCOLAB_PORT` | Normalmente `8085` |
-| Base de datos (SurrealDB) | `SURREALDBPORT`, `SURREALDBUSER`, `SURREALDBPASSWORD`, `SURREALDBNAMESPACE`, `SURREALDBDATABASE` | Obligatorias |
-| Caché (Redis) | `REDISHOST`, `REDISPORT`, `REDISPASSWORD`, `REDISDATABASE` | Obligatorias |
-| Eventos (Pulsar) | `PULSARURL`, `PULSARTOPICNAME`, `PULSAR_PORT`, `PULSAR_PORTEXIT`, `PULSAR_GENERALPORT` | Obligatorias |
-| Tokens de integración | `DOPPLERTOKEN`, `DOPPLER_PROJECT` (por defecto `messageucolab`), `DOPPLER_CONFIG` (por defecto `dev`) | `DOPPLERTOKEN` es obligatoria para generar tokens |
-| Identidad simulada (temporal, hasta integrar el componente de seguridad) | `SIMULATED_SECURITY_ENABLED`, `SIMULATED_SECURITY_TOKEN`, `SIMULATED_SECURITY_ISSUER`, `SIMULATED_SECURITY_SUBJECT`, `SIMULATED_SECURITY_EMAIL`, `SIMULATED_SECURITY_EXPIRATION` | `ISSUER` y `SUBJECT` deben coincidir con el usuario del seed: `https://issuer.example` y `subject-1`. Si no coinciden, el administrador no ve ningún contexto |
-| Azure Key Vault | `AZURE_KEYVAULT_ENABLED`, `AZURE_KEYVAULT_UCOLAB_ENDPOINT`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TENANT_ID` | En local usen `AZURE_KEYVAULT_ENABLED=false` |
-| Traducción con IA | `TRANSLATION_AI_ENABLED`, `TRANSLATION_AI_PROVIDER`, `TRANSLATION_AI_BASE_URL`, `TRANSLATION_AI_MODEL_NAME`, `TRANSLATION_AI_API_KEY`, `TRANSLATION_AI_TEMPERATURE`, `TRANSLATION_AI_MAX_RETRIES`, `TRANSLATION_AI_TIMEOUT_SECONDS`, `OLLAMA_PORT` | Tienen valores por defecto para Ollama local |
-| Gateway | `APIGATEWAY_PORT`, `KONGADMIN_PORT` | Normalmente `8000` y `8001` |
-| Observabilidad | `GRAFANAPORT`, `GF_SECURITY_ADMIN_PASSWORD`, `LOKIPORT`, `LOKIPORTALERT`, `GRPC_OTELPORT`, `HTTP_OTELPORT`, `PROMETHEUSPORT` | Grafana, Loki, OpenTelemetry y Prometheus |
-
-Nunca suban estos valores a Git ni los pongan en capturas.
-
-### 8.4 Comandos
+**Mi aplicación siempre muestra el texto de respaldo. ¿Cómo sé si el problema es el token?**
+Prueba el token solo, sin tu backend. Reemplaza `<TU_TOKEN>` y ejecuta en Git Bash:
 
 ```bash
-cd deployment/docker
-doppler run --project messageucolab --config dev -- docker compose up -d --build
+curl -i "http://localhost:8085/messageucolab/v1/messages/resolve?code=MSG_ASISOK" -H "Token: <TU_TOKEN>"
 ```
 
-La primera vez tarda varios minutos: descarga imágenes, compila y ejecuta todas las pruebas, y
-descarga el modelo de Ollama. Para comprobar que quedó arriba:
+Si responde `200`, el token sirve y el problema está en tu cliente. Si responde `401`, genera un
+token nuevo (paso 5). Si responde `404`, el mensaje no existe en el ambiente de ese token.
 
-```bash
-curl http://localhost:8085/actuator/health        # debe responder {"status":"UP"}
-docker compose ps                                  # messageucolab-app debe estar "healthy"
-```
+**¿Por qué tengo que usar Doppler?**
+Porque en el semillero ninguna contraseña puede quedar escrita en un archivo. Doppler guarda los
+secretos fuera del código y los inyecta al arrancar. Cada equipo usa su propia cuenta, con sus
+propias contraseñas.
 
-Si solo cambió el backend, reconstruyan únicamente ese servicio:
+**¿Por qué necesito un token por ambiente si ya existe el componente de seguridad?**
+Ver el recuadro del paso 5.1: seguridad identifica personas; el token identifica a tu sistema y al
+ambiente del que quieres los mensajes.
 
-```bash
-doppler run --project messageucolab --config dev -- docker compose up -d --no-deps --build messageucolab
-```
+**Tengo mensajes en Develop y los quiero en Production. ¿Tengo que crearlos de nuevo?**
+Hoy no se pueden pasar entre ambientes, y como el código es único por aplicación tampoco puedes
+crearlo otra vez en Production. El equipo de mensajes está trabajando en una operación para
+promoverlos en bloque. Mientras tanto, crea tus mensajes en el ambiente que realmente vas a usar.
 
-### 8.5 Cuidado con los datos
+**¿Qué pasa si MessageUcoLab se cae?**
+Con el cliente del paso 6.2, tu aplicación muestra el texto de respaldo y sigue funcionando.
 
-Las aplicaciones, mensajes y tokens que creen se guardan en el volumen `docker_surrealdb-data`.
-Reiniciar los contenedores o volver a ejecutar el seed **no** los borra (lo verificamos).
-**`docker compose down -v` sí borra ese volumen** y, con él, todo lo que hayan registrado. Al
-levantar de nuevo solo quedan los datos del seed (la aplicación de ejemplo Arquisoft y el mensaje
-`MSG_WELCOME`). Usen `docker compose down` sin `-v` si quieren conservar los datos.
-
-### 8.6 Si reinician SurrealDB, reinicien también la API
-
-Después de reiniciar el contenedor `surrealdb`, la API sigue respondiendo `UP` en
-`/actuator/health`, pero **todas las consultas a la base de datos se quedan colgadas**: no se
-reconecta sola. Reinicien la API:
-
-```bash
-doppler run --project messageucolab --config dev -- docker compose restart messageucolab
-```
+**¿Puedo usar la traducción?**
+Sí, si levantaste el perfil `traduccion` (paso 2.4). Desde la pantalla, en la pestaña
+**Consultar**, elige el idioma y pulsa **Traducir**. Es lenta (unos 15 segundos en local): no la
+llames en cada petición de tu backend. Revisa los marcadores del resultado, porque pueden llegar
+traducidos (`{nombre}` → `{name}`).
 
 ---
 
-## 9. Pasar mensajes de un ambiente a otro (Develop → Production)
+## Anexo A. Variables
 
-**Hoy no está disponible.** Como el código es único por aplicación, tampoco se puede crear el
-mismo código de nuevo en Production: el componente lo rechaza por duplicado.
+**Secretos que ingresas manualmente en Doppler** (paso 2.3):
 
-El equipo de mensajes está trabajando en una operación para promover mensajes en bloque entre
-ambientes. Mientras tanto, creen sus mensajes en el ambiente que realmente van a usar y
-coordinen con el equipo de mensajes si necesitan tenerlos en más de uno.
+| Secreto | Para qué |
+|---|---|
+| `SURREALDBUSER` | Usuario de la base de datos |
+| `SURREALDBPASSWORD` | Contraseña de la base de datos |
+| `REDISPASSWORD` | Contraseña de la caché |
+| `SIMULATED_SECURITY_TOKEN` | Llave de administración, temporal hasta integrar el componente de seguridad |
 
----
+Solo si usas **OpenAI** en vez de Ollama para traducir, agrega también `TRANSLATION_AI_API_KEY`.
 
-## 10. Problemas conocidos
+**En el Doppler de tu aplicación** (paso 5.3): `MESSAGEUCOLAB_TOKEN`, el token de integración.
 
-| Problema | Impacto | Cómo manejarlo mientras se corrige |
-|---|---|---|
-| Si falta el parámetro `code`, `/resolve` responde **500** en lugar de 400 | Bajo | Validen el código antes de llamar |
-| El 401 llega **sin cuerpo** JSON | Bajo | Revisen el código HTTP antes de leer el cuerpo |
-| La traducción puede traducir los marcadores (`{nombre}` → `{name}`) | Medio | Verifiquen los marcadores en el texto traducido |
-| No se pueden promover mensajes entre ambientes | Alto | Sección 9 |
-| Tras reiniciar SurrealDB, la API no se reconecta y sus consultas se cuelgan, aunque `/actuator/health` diga `UP` | Alto en ambientes compartidos | Reiniciar `messageucolab` (sección 8.6). Con timeout y respaldo, su aplicación no se cae |
-| `docs/message-consumer-api.md` describe una respuesta sin el envoltorio `data` y un encabezado `Cache-Control: no-store` que hoy no se envían | Medio | Esta guía describe el comportamiento real |
+**Ya vienen configuradas en `compose.yaml`** (no las agregues a Doppler): puertos de cada servicio,
+nombre de la base de datos y del namespace, configuración de Redis y Pulsar, configuración de la
+traducción (Ollama local), identidad de administración simulada (issuer y subject del usuario
+precargado) y Azure Key Vault desactivado.
 
----
+## Anexo B. Problemas conocidos
 
-## 11. Lista de verificación para su equipo
+| Problema | Cómo manejarlo |
+|---|---|
+| La pantalla no tiene botón para generar tokens | Usar los comandos del paso 5.2 |
+| No se pueden pasar mensajes entre ambientes | Ver la pregunta frecuente correspondiente |
+| Si falta el parámetro `code`, `/resolve` responde 500 en vez de 400 | Valida el código antes de llamar |
+| El 401 llega sin cuerpo JSON | Revisa el código HTTP antes de leer el cuerpo |
+| La traducción puede traducir los marcadores | Revisa los marcadores del texto traducido |
+| Si se reinicia el contenedor de SurrealDB, la API deja de responder aunque el health diga UP | Reinicia el contenedor `messageucolab` en Docker Desktop |
 
-- [ ] Su aplicación está registrada en MessageUcoLab con al menos una funcionalidad
-- [ ] Tienen un token por cada ambiente que usan, guardado en su gestor de secretos
-- [ ] Anotaron la fecha de vencimiento de cada token
-- [ ] Cada texto escrito en el código tiene su código `MSG_...` creado en estado Active
-- [ ] Su cliente envía el encabezado `Token`, no `Authorization: Bearer`
-- [ ] Su cliente tiene timeout, caché y texto de respaldo
-- [ ] Su aplicación reemplaza los marcadores `{...}`
-- [ ] Probaron el caso en que MessageUcoLab está apagado: su aplicación debe seguir funcionando
+## Anexo C. Lista de verificación
+
+- [ ] <http://localhost:8085/actuator/health> muestra `UP`
+- [ ] La pantalla de administración carga dentro de tu front
+- [ ] Tu aplicación está registrada, con al menos una funcionalidad
+- [ ] Cada texto de tu código tiene su código `MSG_` creado, en estado Active
+- [ ] **Probar como consumidor** (paso 6.1) muestra tu mensaje
+- [ ] Tienes un token por ambiente, guardado en el Doppler de tu aplicación, con su vencimiento anotado
+- [ ] Tu cliente envía el encabezado `Token`, tiene timeout, caché y texto de respaldo
+- [ ] Tu aplicación reemplaza los marcadores `{...}`
+- [ ] Probaste los cinco escenarios del paso 7, incluido MessageUcoLab apagado

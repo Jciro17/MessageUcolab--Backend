@@ -17,6 +17,16 @@
     <properties>
         <java.version>25</java.version>
         <maven.compiler.release>${java.version}</maven.compiler.release>
+
+        <!-- SonarCloud: se ejecuta con mvn verify sonar:sonar (token en SONAR_TOKEN) -->
+        <sonar.host.url>https://sonarcloud.io</sonar.host.url>
+        <sonar.organization>jciro17</sonar.organization>
+        <sonar.projectKey>Jciro17_MessageUcolab--Backend</sonar.projectKey>
+        <sonar.projectName>MessageUcolab--Backend</sonar.projectName>
+        <sonar.java.source>${java.version}</sonar.java.source>
+        <sonar.sourceEncoding>UTF-8</sonar.sourceEncoding>
+        <sonar.coverage.jacoco.xmlReportPaths>${project.build.directory}/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
+        <sonar-maven-plugin.version>5.1.0.4751</sonar-maven-plugin.version>
     </properties>
     <modules>
         <module>core</module>
@@ -40,6 +50,15 @@
         </dependency>
     </dependencies>
     <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.sonarsource.scanner.maven</groupId>
+                    <artifactId>sonar-maven-plugin</artifactId>
+                    <version>${sonar-maven-plugin.version}</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
